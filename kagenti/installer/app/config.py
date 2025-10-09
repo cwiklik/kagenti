@@ -89,7 +89,7 @@ class InstallableComponent(str, Enum):
     INSPECTOR = "inspector"
     CERT_MANAGER = "cert_manager"
 
-
 ## Kubernetes Labels and Selectors
 ENABLED_NAMESPACE_LABEL_KEY = "kagenti-enabled"
 ENABLED_NAMESPACE_LABEL_VALUE = "true"
+TOOLHIVE = "toolhive"

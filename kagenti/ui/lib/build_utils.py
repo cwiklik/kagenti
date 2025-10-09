@@ -220,6 +220,7 @@ def _construct_tool_resource_body(
     if client_secret_for_env:
         final_env_vars.append({"name": "CLIENT_SECRET", "value": client_secret_for_env})
 
+
     # Extract service ports from pod_config or use defaults
     if pod_config and pod_config.get("service_ports"):
         service_ports = pod_config["service_ports"]
@@ -233,132 +234,187 @@ def _construct_tool_resource_body(
                 "protocol": "TCP",
             }
         ]
-    # Build the spec dictionary
-    spec = {
-        "description": description,
-        "suspend": False,
-        "tool": {
-            "toolType": "MCP",
+
+
+
+    client_id = "example-client-id"  # Replace with actual value
+    clientId = build_namespace + "/" + k8s_resource_name
+
+    final_env_vars.extend([
+        {
+            "name": "CLIENT_NAME",
+            "value": client_id
         },
-        "deployer": {
-            "name": k8s_resource_name,
-            "namespace": build_namespace,
-            "deployAfterBuild": True,
-            "kubernetes": {
-                "imageSpec": {
-                    "image": image_name,
-                    "imageTag": image_tag,
-                    "imageRegistry": image_registry_prefix,
-                    "imagePullPolicy": constants.DEFAULT_IMAGE_POLICY,
-                },
-                "containerPorts": [
-                    {
-                        "name": "http",
-                        "containerPort": constants.DEFAULT_IN_CLUSTER_PORT,
-                        "protocol": "TCP",
-                    },
-                ],
-                "servicePorts": service_ports,
-                "resources": {
-                    "limits": constants.DEFAULT_RESOURCE_LIMITS,
-                    "requests": constants.DEFAULT_RESOURCE_REQUESTS,
-                },
-                "volumes": [
-                    {
-                        "name": "cache",
-                        "emptyDir": {},
-                    },
-                    {
-                        "name": "marvin",
-                        "emptyDir": {},
-                    },
-                ],
-                "volumeMounts": [
-                    {
-                        "name": "cache",
-                        "mountPath": "/app/.cache",
-                    },
-                    {
-                        "name": "marvin",
-                        "mountPath": "/.marvin",
-                    },
-                ],
-            },
-            "env": final_env_vars,
+        {
+            "name": "CLIENT_ID",
+            "value": f"spiffe://localtest.me/sa/{k8s_resource_name}"
         },
-    }
-    if build_from_source:
-        selected_mode = (
-            DEV_EXTERNAL_MODE
-            if (registry_config and registry_config.get("requires_auth"))
-            else DEV_LOCAL_MODE
-        )
-        pipeline_steps = get_pipeline_steps_for_mode(selected_mode)
+        {
+            "name": "NAMESPACE",
+            "value": build_namespace
+        },
+        {
+            "name": "UV_CACHE_DIR",
+            "value": "/data/cache"
 
-        build_params = [
-            {
-                "name": "SOURCE_REPO_SECRET",
-                "value": "github-token-secret",
-            },
-            {
-                "name": "repo-url",
-                "value": remove_url_prefix(repo_url),
-            },
-            {
-                "name": "revision",
-                "value": repo_branch,
-            },
-            {
-                "name": "subfolder-path",
-                "value": source_subfolder,
-            },
-            {
-                "name": "image",
-                "value": f"{image_registry_prefix}/{image_name}:{image_tag}",
-            },
-        ]
-
-        # Add registry credentials for external registries
-        if (
-            registry_config
-            and registry_config.get("requires_auth")
-            and registry_config.get("credentials_secret")
-        ):
-            build_params.append(
-                {
-                    "name": "registry-secret",  # Use the parameter name expected by kaniko task
-                    "value": registry_config["credentials_secret"],
-                }
-            )
-
-        spec["tool"] = {
-            "toolType": "MCP",
-            "build": {
-                "mode": "custom",  # Always use custom mode since we're providing steps
-                "pipeline": {
-                    "namespace": build_namespace,
-                    "steps": pipeline_steps,
-                    "parameters": build_params,
-                },
-                "cleanupAfterBuild": True,
-            },
         }
+    ])
+    
+    full_image_url = f"{image_registry_prefix}/{image_name}:{image_tag}"
+
     body = {
-        "apiVersion": f"{constants.CRD_GROUP}/{constants.CRD_VERSION}",
-        "kind": "Component",
+        "apiVersion": f"{constants.TOOLHIVE_CRD_GROUP}/{constants.TOOLHIVE_CRD_VERSION}",
+        "kind": "MCPServer",
         "metadata": {
             "name": k8s_resource_name,
             "namespace": build_namespace,
             "labels": {
                 constants.APP_KUBERNETES_IO_CREATED_BY: constants.STREAMLIT_UI_CREATOR_LABEL,
-                constants.APP_KUBERNETES_IO_NAME: constants.KAGENTI_OPERATOR_LABEL_NAME,
+                constants.APP_KUBERNETES_IO_NAME: constants.TOOLHIVE_OPERATOR_LABEL_NAME,
                 constants.KAGENTI_TYPE_LABEL: resource_type,
                 constants.KAGENTI_PROTOCOL_LABEL: protocol,
                 constants.KAGENTI_FRAMEWORK_LABEL: framework,
             },
         },
-        "spec": spec,
-    }
+        "spec": {
+            "image": repo_url,
+            "transport": "streamable-http",
+            "port": constants.DEFAULT_IN_CLUSTER_PORT,
+            "targetPort": constants.DEFAULT_IN_CLUSTER_PORT,
+
+            "podTemplateSpec": {
+                "spec": {
+                    "serviceAccountName": k8s_resource_name,
+                    "securityContext": {
+                        "runAsNonRoot": True,
+                        "seccompProfile": {
+                            "type": "RuntimeDefault"
+                        }
+                    },
+                    "volumes": [
+                        {        
+                            "name": "data-volume",        
+                            "emptyDir": {}
+                        },
+                        {        
+                            "name": "tmp-volume",        
+                            "emptyDir": {}
+                       },                       
+                    ],
+                    "initContainers": [
+                        {
+                            "name": "init-mcp",
+                            "image": "busybox:latest",
+                            "command": ["sh", "-c", "mkdir -p /data/cache/uv && mkdir -p /tmp"],
+                            "volumeMounts": [                            
+                                {                                
+                                    "name": "data-volume",                                
+                                    "mountPath": "/data/cache",                               
+                                    "readOnly": False                            
+                                }                        
+                            ]
+                        },
+                        {
+                            "name": "kagenti-client-registration",
+                            "image": "ghcr.io/kagenti/kagenti/client-registration:latest",     
+                            "imagePullPolicy": constants.DEFAULT_IMAGE_POLICY,
+                            "resources": {
+                                "limits":constants.DEFAULT_RESOURCE_LIMITS,
+                                "requests": constants.DEFAULT_RESOURCE_REQUESTS,
+                            },
+                            "env": [                            
+                                {                                
+                                    "name": "KEYCLOAK_URL",                                
+                                    "valueFrom": {                                    
+                                        "configMapKeyRef": {                                        
+                                            "name": "environments",                                        
+                                            "key": "KEYCLOAK_URL",                                        
+                                            "optional": True                                    
+                                        }                                
+                                    }                            
+                                },
+                                {                                
+                                    "name": "KEYCLOAK_REALM",                                
+                                    "valueFrom": {                                    
+                                        "configMapKeyRef": {                                        
+                                            "name": "environments",                                        
+                                            "key": "KEYCLOAK_REALM",                                                                         
+                                        }                                
+                                    }                            
+                                },
+                                {                                
+                                    "name": "KEYCLOAK_ADMIN_USERNAME",                                
+                                    "valueFrom": {                                    
+                                        "configMapKeyRef": {                                        
+                                            "name": "environments",                                        
+                                            "key": "KEYCLOAK_ADMIN_USERNAME",                                                                      
+                                        }                                
+                                    }                            
+                                },
+                                {                                
+                                    "name": "KEYCLOAK_ADMIN_PASSWORD",                                
+                                    "valueFrom": {                                    
+                                        "configMapKeyRef": {                                        
+                                            "name": "environments",                                        
+                                            "key": "KEYCLOAK_ADMIN_PASSWORD",                                                  
+                                        }                                
+                                    }                            
+                                }, 
+                                {
+                                    "name":  "CLIENT_NAME",
+                                    "value": k8s_resource_name,
+                                },
+                                {
+                                    "name":  "CLIENT_ID",
+                                    "value": "spiffe://localtest.me/sa/" + k8s_resource_name,
+                                },
+                                {
+                                    "name":  "NAMESPACE",
+                                    "value": build_namespace,
+                                },                                                                                                                 
+                            ]
+                    
+                        }                
+                    ],
+                    "containers": [
+                        {
+                            "name": "mcp",                           
+                            "securityContext": {
+                                "allowPrivilegeEscalation": False,
+                                "capabilities": {
+                                    "drop": ["ALL"]
+                                },
+                                "runAsUser": 1000
+                            },
+                            "resources": {
+                                "limits":constants.DEFAULT_RESOURCE_LIMITS,
+                                "requests": constants.DEFAULT_RESOURCE_REQUESTS,
+                            },
+                            "env": final_env_vars,
+                            "volumeMounts": [                            
+                                {                                
+                                    "name": "data-volume",                                
+                                    "mountPath": "/data/cache",                               
+                                    "readOnly": False                            
+                                },
+                                {                                
+                                    "name": "tmp-volume",                                
+                                    "mountPath": "/tmp",                               
+                                    "readOnly": False                            
+                                }   
+                                                    
+                            ]
+                        }
+                    ],
+                }
+            }
+        }
+        }
+#    }
+
+    st_object.subheader(f"DEBUG: MCPServer Resource Body for {resource_type} Build")
+    st_object.write("MCPServer def:",  body)
+
     return body
 
 
@@ -960,16 +1016,25 @@ def trigger_and_monitor_deployment_from_image(
         f"Submitting deployment for {resource_type} '{k8s_resource_name}' in namespace '{deployment_namespace}'..."
     ):
         try:
-            logger.info(
-                "Generated Component manifest:\n%s", json.dumps(cr_body, indent=2)
-            )
-            custom_obj_api.create_namespaced_custom_object(
-                group=constants.CRD_GROUP,
-                version=constants.CRD_VERSION,
-                namespace=deployment_namespace,
-                plural=constants.COMPONENTS_PLURAL,
-                body=cr_body,
-            )
+
+            logger.info("Generated Component manifest:\n%s", json.dumps(cr_body, indent=2))
+            if resource_type.lower() == "agent":
+                custom_obj_api.create_namespaced_custom_object(
+                    group=constants.CRD_GROUP,
+                    version=constants.CRD_VERSION,
+                    namespace=deployment_namespace,
+                    plural=constants.COMPONENTS_PLURAL,
+                    body=cr_body,
+                )
+            elif resource_type.lower() == "tool":
+                custom_obj_api.create_namespaced_custom_object(
+                    group=constants.TOOLHIVE_CRD_GROUP,
+                    version=constants.TOOLHIVE_CRD_VERSION,
+                    namespace=deployment_namespace,
+                    plural=constants.TOOLHIVE_MCP_PLURAL,
+                    body=cr_body,
+                )    
+
             st_object.success(
                 f"{resource_type.capitalize()} '{k8s_resource_name}' creation request sent to namespace '{deployment_namespace}'."
             )
@@ -1002,25 +1067,42 @@ def trigger_and_monitor_deployment_from_image(
             deployment_retries += 1
             try:
                 # Re-fetch the object to get latest deployment status
-                build_obj = custom_obj_api.get_namespaced_custom_object(
-                    group=constants.CRD_GROUP,
-                    version=constants.CRD_VERSION,
-                    namespace=deployment_namespace,
-                    plural=constants.COMPONENTS_PLURAL,
-                    name=k8s_resource_name,
+
+                if resource_type.lower() == "agent":
+                    build_obj = custom_obj_api.get_namespaced_custom_object(
+                        group=constants.CRD_GROUP,
+                        version=constants.CRD_VERSION,
+                        namespace=deployment_namespace,
+                        plural=constants.COMPONENTS_PLURAL,
+                        name=k8s_resource_name,
+                    )
+                    final_deployment_status = build_obj.get("status", {}).get(
+                       "deploymentStatus", {})
+                    final_deployment_phase = final_deployment_status.get("phase", "Unknown")
+                    deployment_message = final_deployment_status.get("deploymentMessage", "")
+                    # Update status display
+                    status_placeholder.info(
+                        f"Deployment Status for '{k8s_resource_name}': **{final_deployment_phase}**\n"
+                        f"Message: {deployment_message}"
                 )
-                final_deployment_status = build_obj.get("status", {}).get(
-                    "deploymentStatus", {}
-                )
-                final_deployment_phase = final_deployment_status.get("phase", "Unknown")
-                deployment_message = final_deployment_status.get(
-                    "deploymentMessage", ""
-                )
-                # Update status display
-                status_placeholder.info(
-                    f"Deployment Status for '{k8s_resource_name}': **{final_deployment_phase}**\n"
-                    f"Message: {deployment_message}"
-                )
+                elif resource_type.lower() == "tool":
+                    build_obj = custom_obj_api.get_namespaced_custom_object(
+                        group=constants.TOOLHIVE_CRD_GROUP,
+                        version=constants.TOOLHIVE_CRD_VERSION,
+                        namespace=deployment_namespace,
+                        plural=constants.TOOLHIVE_MCP_PLURAL,
+                        name=k8s_resource_name,
+                    )
+                    final_deployment_status = build_obj.get("status", {})
+                    final_deployment_phase = final_deployment_status.get("phase", "Unknown")
+                    
+                    
+                    if final_deployment_phase == "Running":
+                        final_deployment_phase = "Ready"
+                        status_placeholder.info(
+                           f"Deployment Status for '{k8s_resource_name}': **{final_deployment_phase}**\n"
+                           f"Message: Successfully deployed {k8s_resource_name}.")
+
 
                 if final_deployment_phase in ["Ready", "Failed", "Error"]:
                     break
@@ -1212,19 +1294,21 @@ def render_import_form(
                 all_configmap_vars = parse_configmap_data_to_env_vars(config_map_data)
                 configmap = []
                 for var in all_configmap_vars:
-                    configmap.append(
-                        {
-                            "name": var["name"],
+                    if var["name"].strip() not in configmap :
+                        configmap.append({
+                            "name": var["name"], 
                             "value": var["value"],
-                            "configmap_origin": True,
-                            "configmap_section": var.get("section", ""),
-                            "configmap_type": var.get("type", "configmap"),
-                        }
-                    )
+                            'configmap_origin': True,
+                            'configmap_section': var.get('section', ''),
+                            'configmap_type': var.get('type', 'configmap')
+                            })
+
                 st.session_state[custom_env_key] = configmap + user_custom_vars
                 st.session_state[configmap_loaded_key] = True
                 return
+            
 
+        
         # takes as input content of the .env file from remote repo and
         # parses each line to extract name-value pair and adds them to
         # a list
@@ -1507,14 +1591,16 @@ def render_import_form(
     if selected_env_sets and env_options:
         for key in selected_env_sets:
             if key in env_options and isinstance(env_options[key], list):
-                final_additional_envs.extend(env_options[key])
-
+                if key not in final_additional_envs :
+                   final_additional_envs.extend(env_options[key])
+   
     if custom_env_vars:
         for env_var in custom_env_vars:
             if env_var["name"].strip() and env_var["value"].strip():
-                final_additional_envs.append(
-                    {"name": env_var["name"].strip(), "value": env_var["value"].strip()}
-                )
+
+                if env_var["name"].strip() not in final_additional_envs :
+                   final_additional_envs.append({"name": env_var["name"].strip(),
+                                            "value": env_var["value"].strip()})
 
     custom_obj_api = get_custom_objects_api()
     if not custom_obj_api or not core_v1_api:
@@ -1722,6 +1808,8 @@ def render_import_form(
                 return
 
             resource_name_suggestion = extract_image_name(docker_image_url)
+            st_object.subheader(f"DEBUG: Final Environment Variables for {resource_type} Build")
+            st_object.write("Final vars:",  final_additional_envs)
 
             trigger_and_monitor_deployment_from_image(
                 st_object=st,
@@ -2120,4 +2208,34 @@ def parse_configmap_data_to_env_vars(
                 }
             )
 
+
     return env_vars
+
+def merge_env_variables(global_envs, custom_envs):
+    """Merge global env vars from configmap with custom env vars, giving precedence to custom vars."""
+    final_envs = {}
+    
+    temp_env_dict = {}
+    for env_var in global_envs:
+         if isinstance(env_var, dict) and 'name' in env_var and 'value' in env_var:  
+            var_name = env_var['name'].strip()
+            if var_name and var_name not in temp_env_dict:
+               temp_env_dict[env_var['name']] = env_var['value']
+    for var_name, var_value in temp_env_dict.items():
+        if var_name not in final_envs:
+            final_envs[var_name] = var_value
+
+
+    if custom_envs:
+        temp_custom_dict = {}
+        for env in custom_envs:
+            name = env.get('name', '').strip()
+            value = env.get('value', '')
+            if name and value:
+                temp_custom_dict[name] = value
+        for var_name, var_value in temp_custom_dict.items():
+            final_envs[var_name] = var_value    
+
+    merged_env_list = [{"name": name, "value": value} for name, value in final_envs.items()]    
+    return merged_env_list
+
