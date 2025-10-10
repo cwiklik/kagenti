@@ -253,11 +253,6 @@ def _construct_tool_resource_body(
             "name": "NAMESPACE",
             "value": build_namespace
         },
-        {
-            "name": "UV_CACHE_DIR",
-            "value": "/data/cache"
-
-        }
     ])
     
     full_image_url = f"{image_registry_prefix}/{image_name}:{image_tag}"
@@ -292,6 +287,16 @@ def _construct_tool_resource_body(
                         }
                     },
                     "volumes": [
+                        {
+                            "name": "shared-data",        
+                            "emptyDir": {}
+
+                        },
+			            {
+				            "name":      "cache",
+				            "emptyDir": {},
+			            },
+
                         {        
                             "name": "data-volume",        
                             "emptyDir": {}
@@ -302,6 +307,7 @@ def _construct_tool_resource_body(
                        },                       
                     ],
                     "initContainers": [
+
                         {
                             "name": "init-mcp",
                             "image": "busybox:latest",
@@ -314,6 +320,7 @@ def _construct_tool_resource_body(
                                 }                        
                             ]
                         },
+
                         {
                             "name": "kagenti-client-registration",
                             "image": "ghcr.io/kagenti/kagenti/client-registration:latest",     
@@ -322,6 +329,30 @@ def _construct_tool_resource_body(
                                 "limits":constants.DEFAULT_RESOURCE_LIMITS,
                                 "requests": constants.DEFAULT_RESOURCE_REQUESTS,
                             },
+                            "volumeMounts": [                            
+                                {                                
+                                    "name": "shared-data",                                
+                                    "mountPath": "/shared",                               
+                                    "readOnly": False                            
+                                },
+                                {                                
+                                    "name": "cache",                                
+                                    "mountPath": "/app/.cache",                               
+                                    "readOnly": False                            
+                                },                        
+                                {                                
+                                    "name": "tmp-volume",                                
+                                    "mountPath": "/tmp",                               
+                                    "readOnly": False                            
+                                },                        
+                                {                                
+                                    "name": "data-volume",                                
+                                    "mountPath": "/data/cache",                               
+                                    "readOnly": False                            
+                                },                        
+          
+                            ],
+
                             "env": [                            
                                 {                                
                                     "name": "KEYCLOAK_URL",                                
@@ -392,6 +423,17 @@ def _construct_tool_resource_body(
                             },
                             "env": final_env_vars,
                             "volumeMounts": [                            
+                                {                                
+                                    "name": "shared-data",                                
+                                    "mountPath": "/shared",                               
+                                    "readOnly": False                            
+                                },
+                                {                                
+                                    "name": "cache",                                
+                                    "mountPath": "/app/.cache",                               
+                                    "readOnly": False                            
+                                },                        
+
                                 {                                
                                     "name": "data-volume",                                
                                     "mountPath": "/data/cache",                               
