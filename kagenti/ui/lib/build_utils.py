@@ -214,39 +214,34 @@ def _construct_tool_resource_body(
     client_secret_for_env = _get_keycloak_client_secret(
         st_object, f"{k8s_resource_name}-client"
     )
-    final_env_vars = list(constants.DEFAULT_ENV_VARS)
-    if additional_env_vars:
-        final_env_vars.extend(additional_env_vars)
-    if client_secret_for_env:
-        final_env_vars.append({"name": "CLIENT_SECRET", "value": client_secret_for_env})
-
-    # Extract service ports from pod_config or use defaults
-    if pod_config and pod_config.get("service_ports"):
-        service_ports = pod_config["service_ports"]
-    else:
-        # Use default service ports
-        service_ports = [
-            {
-                "name": "http",
-                "port": constants.DEFAULT_IN_CLUSTER_PORT,
-                "targetPort": constants.DEFAULT_IN_CLUSTER_PORT,
-                "protocol": "TCP",
-            }
-        ]
 
     client_id = "example-client-id"  # Replace with actual value
     clientId = build_namespace + "/" + k8s_resource_name
 
-    final_env_vars.extend(
-        [
-            {"name": "CLIENT_NAME", "value": client_id},
-            {
-                "name": "CLIENT_ID",
-                "value": f"spiffe://localtest.me/sa/{k8s_resource_name}",
-            },
-            {"name": "NAMESPACE", "value": build_namespace},
-        ]
-    )
+    env_dict = {}
+    
+    # Add default vars
+    for var in constants.DEFAULT_ENV_VARS:
+        if isinstance(var, dict) and "name" in var:
+            env_dict[var["name"]] = var
+    
+    # Add/override with additional vars from UI
+    if additional_env_vars:
+        for var in additional_env_vars:
+            if isinstance(var, dict) and "name" in var:
+                env_dict[var["name"]] = var
+    
+    # Add/override with runtime-specific vars
+    if client_secret_for_env:
+        env_dict["CLIENT_SECRET"] = {"name": "CLIENT_SECRET", "value": client_secret_for_env}
+    
+    env_dict["CLIENT_NAME"] = {"name": "CLIENT_NAME", "value": client_id}
+    env_dict["CLIENT_ID"] = {"name": "CLIENT_ID", "value": f"spiffe://localtest.me/sa/{k8s_resource_name}"}
+    env_dict["NAMESPACE"] = {"name": "NAMESPACE", "value": build_namespace}
+    
+    # Convert back to list
+    final_env_vars = list(env_dict.values())
+
 
     full_image_url = f"{image_registry_prefix}/{image_name}:{image_tag}"
 
@@ -277,115 +272,12 @@ def _construct_tool_resource_body(
                         "seccompProfile": {"type": "RuntimeDefault"},
                     },
                     "volumes": [
-                        {"name": "shared-data", "emptyDir": {}},
                         {
                             "name": "cache",
                             "emptyDir": {},
                         },
-                        {"name": "data-volume", "emptyDir": {}},
-                        {"name": "tmp-volume", "emptyDir": {}},
                     ],
-                    "initContainers": [
-                        {
-                            "name": "init-mcp",
-                            "image": "busybox:latest",
-                            "command": [
-                                "sh",
-                                "-c",
-                                "mkdir -p /data/cache/uv && mkdir -p /tmp",
-                            ],
-                            "volumeMounts": [
-                                {
-                                    "name": "data-volume",
-                                    "mountPath": "/data/cache",
-                                    "readOnly": False,
-                                }
-                            ],
-                        },
-                        {
-                            "name": "kagenti-client-registration",
-                            "image": "ghcr.io/kagenti/kagenti/client-registration:latest",
-                            "imagePullPolicy": constants.DEFAULT_IMAGE_POLICY,
-                            "resources": {
-                                "limits": constants.DEFAULT_RESOURCE_LIMITS,
-                                "requests": constants.DEFAULT_RESOURCE_REQUESTS,
-                            },
-                            "volumeMounts": [
-                                {
-                                    "name": "shared-data",
-                                    "mountPath": "/shared",
-                                    "readOnly": False,
-                                },
-                                {
-                                    "name": "cache",
-                                    "mountPath": "/app/.cache",
-                                    "readOnly": False,
-                                },
-                                {
-                                    "name": "tmp-volume",
-                                    "mountPath": "/tmp",
-                                    "readOnly": False,
-                                },
-                                {
-                                    "name": "data-volume",
-                                    "mountPath": "/data/cache",
-                                    "readOnly": False,
-                                },
-                            ],
-                            "env": [
-                                {
-                                    "name": "KEYCLOAK_URL",
-                                    "valueFrom": {
-                                        "configMapKeyRef": {
-                                            "name": "environments",
-                                            "key": "KEYCLOAK_URL",
-                                            "optional": True,
-                                        }
-                                    },
-                                },
-                                {
-                                    "name": "KEYCLOAK_REALM",
-                                    "valueFrom": {
-                                        "configMapKeyRef": {
-                                            "name": "environments",
-                                            "key": "KEYCLOAK_REALM",
-                                        }
-                                    },
-                                },
-                                {
-                                    "name": "KEYCLOAK_ADMIN_USERNAME",
-                                    "valueFrom": {
-                                        "configMapKeyRef": {
-                                            "name": "environments",
-                                            "key": "KEYCLOAK_ADMIN_USERNAME",
-                                        }
-                                    },
-                                },
-                                {
-                                    "name": "KEYCLOAK_ADMIN_PASSWORD",
-                                    "valueFrom": {
-                                        "configMapKeyRef": {
-                                            "name": "environments",
-                                            "key": "KEYCLOAK_ADMIN_PASSWORD",
-                                        }
-                                    },
-                                },
-                                {
-                                    "name": "CLIENT_NAME",
-                                    "value": k8s_resource_name,
-                                },
-                                {
-                                    "name": "CLIENT_ID",
-                                    "value": "spiffe://localtest.me/sa/"
-                                    + k8s_resource_name,
-                                },
-                                {
-                                    "name": "NAMESPACE",
-                                    "value": build_namespace,
-                                },
-                            ],
-                        },
-                    ],
+
                     "containers": [
                         {
                             "name": "mcp",
@@ -401,23 +293,8 @@ def _construct_tool_resource_body(
                             "env": final_env_vars,
                             "volumeMounts": [
                                 {
-                                    "name": "shared-data",
-                                    "mountPath": "/shared",
-                                    "readOnly": False,
-                                },
-                                {
                                     "name": "cache",
                                     "mountPath": "/app/.cache",
-                                    "readOnly": False,
-                                },
-                                {
-                                    "name": "data-volume",
-                                    "mountPath": "/data/cache",
-                                    "readOnly": False,
-                                },
-                                {
-                                    "name": "tmp-volume",
-                                    "mountPath": "/tmp",
                                     "readOnly": False,
                                 },
                             ],
@@ -427,7 +304,6 @@ def _construct_tool_resource_body(
             },
         },
     }
-    #    }
 
     st_object.subheader(f"DEBUG: MCPServer Resource Body for {resource_type} Build")
     st_object.write("MCPServer def:", body)
@@ -530,14 +406,30 @@ def _construct_agent_resource_body(
     client_secret_for_env = _get_keycloak_client_secret(
         st_object, f"{k8s_resource_name}-client"
     )
-    final_env_vars = list(constants.DEFAULT_ENV_VARS)
+
+    env_dict = {}
+    
+    # Add default vars
+    for var in constants.DEFAULT_ENV_VARS:
+        if isinstance(var, dict) and "name" in var:
+            env_dict[var["name"]] = var
+    
+    # Add/override with additional vars from UI
     if additional_env_vars:
-        final_env_vars.extend(additional_env_vars)
+        for var in additional_env_vars:
+            if isinstance(var, dict) and "name" in var:
+                env_dict[var["name"]] = var
+    
+    # Add/override with runtime-specific vars
     if client_secret_for_env:
-        final_env_vars.append({"name": "CLIENT_SECRET", "value": client_secret_for_env})
-    final_env_vars.append(
-        {"name": "GITHUB_SECRET_NAME", "value": constants.GIT_USER_SECRET_NAME}
-    )
+        env_dict["CLIENT_SECRET"] = {"name": "CLIENT_SECRET", "value": client_secret_for_env}
+    
+    env_dict["GITHUB_SECRET_NAME"] = {"name": "GITHUB_SECRET_NAME", "value": constants.GIT_USER_SECRET_NAME}
+    
+    # Convert back to list
+    final_env_vars = list(env_dict.values())
+
+
 
     # Extract service ports from pod_config or use defaults
     if pod_config and pod_config.get("service_ports"):
@@ -1316,9 +1208,12 @@ def render_import_form(
             if config_map_data:
                 # Parse configmap data into env vars
                 all_configmap_vars = parse_configmap_data_to_env_vars(config_map_data)
+                configmap_names = set()  # Track names we've seen
                 configmap = []
                 for var in all_configmap_vars:
-                    if var["name"].strip() not in configmap:
+                    var_name = var["name"].strip()
+                    if var_name not in configmap_names:
+                        configmap_names.add(var_name)
                         configmap.append(
                             {
                                 "name": var["name"],
@@ -1612,22 +1507,26 @@ def render_import_form(
         return
 
     final_additional_envs = []
+    seen_env_names = set()
     if selected_env_sets and env_options:
         for key in selected_env_sets:
             if key in env_options and isinstance(env_options[key], list):
-                if key not in final_additional_envs:
-                    final_additional_envs.extend(env_options[key])
+                for env_var in env_options[key]:
+                    if isinstance(env_var, dict):
+                        name = env_var.get("name", "").strip()
+                        if name and name not in seen_env_names:
+                           seen_env_names.add(name)
+                           final_additional_envs.append(env_var)
 
     if custom_env_vars:
         for env_var in custom_env_vars:
-            if env_var["name"].strip() and env_var["value"].strip():
-                if env_var["name"].strip() not in final_additional_envs:
-                    final_additional_envs.append(
-                        {
-                            "name": env_var["name"].strip(),
-                            "value": env_var["value"].strip(),
-                        }
-                    )
+            name = env_var["name"].strip()
+            value = env_var["value"].strip()
+            if name and value and name not in seen_env_names:
+                seen_env_names.add(name)
+                final_additional_envs.append(
+                    convert_secret_string_to_k8s_format({"name": name, "value": value})
+                )
 
     custom_obj_api = get_custom_objects_api()
     if not custom_obj_api or not core_v1_api:
@@ -2268,3 +2167,46 @@ def merge_env_variables(global_envs, custom_envs):
         {"name": name, "value": value} for name, value in final_envs.items()
     ]
     return merged_env_list
+
+def convert_secret_string_to_k8s_format(env_var_dict):
+    """
+    Convert secret reference strings like '<slack-secret:bot-token>' 
+    back to Kubernetes valueFrom.secretKeyRef format.
+    
+    Args:
+        env_var_dict: Environment variable dictionary with 'name' and 'value'
+    
+    Returns:
+        Dictionary with proper Kubernetes format
+    """
+    import re
+    
+    name = env_var_dict.get("name", "")
+    value = env_var_dict.get("value", "")
+    
+    # Check if already has valueFrom (from selected_env_sets)
+    if "valueFrom" in env_var_dict:
+        return env_var_dict
+    
+    # Check if value is a secret reference in format <secret-name:key>
+    secret_pattern = r'^<([^:]+):([^>]+)>$'
+    match = re.match(secret_pattern, str(value))
+    
+    if match:
+        secret_name = match.group(1)
+        secret_key = match.group(2)
+        return {
+            "name": name,
+            "valueFrom": {
+                "secretKeyRef": {
+                    "name": secret_name,
+                    "key": secret_key
+                }
+            }
+        }
+    
+    # Regular value
+    return {
+        "name": name,
+        "value": value
+    }
