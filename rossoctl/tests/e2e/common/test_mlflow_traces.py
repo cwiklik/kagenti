@@ -402,6 +402,68 @@ def get_mlflow_client():
     return _mlflow_client
 
 
+def _diagnose_empty_traces(client, experiments) -> None:
+    """Diagnostics for issue #2284: the MLflow SDK returns 0 traces even though
+    traces are persisted in the DB (a read-back regression that surfaced in the
+    kagenti->rossoctl rename window). This distinguishes a read-path/ingress issue
+    (the SDK sees no experiments over the ingress) from an experiment-linkage/API
+    issue (experiments present, but ``search_traces(locations=...)`` misses the
+    OTLP-ingested traces). Runs ONLY when 0 traces were found, so it adds no noise
+    on healthy runs. Every probe is best-effort and must never raise.
+    """
+    import mlflow
+
+    tracking_uri = mlflow.get_tracking_uri()
+    logger.warning("[#2284] 0 traces via SDK read-back — running read-path diagnostics")
+    logger.warning(f"[#2284] tracking_uri={tracking_uri}")
+    logger.warning(
+        f"[#2284] search_experiments() -> {len(experiments)}: "
+        + ", ".join(f"{e.name}(id={e.experiment_id})" for e in experiments)
+    )
+    ids = [e.experiment_id for e in experiments]
+
+    # PROBE A — deprecated experiment_ids param: if THIS returns traces, the
+    # `locations=` usage is the bug (test/SDK fix).
+    try:
+        t = client.search_traces(experiment_ids=ids) if ids else []
+        logger.warning(f"[#2284] PROBE search_traces(experiment_ids={ids}) -> {len(t)}")
+    except Exception as ex:
+        logger.warning(
+            f"[#2284] PROBE search_traces(experiment_ids=...) raised: {ex!r}"
+        )
+
+    # PROBE B — explicit ids: the OTLP exporter writes x-mlflow-experiment-id: "0",
+    # so traces may live in experiment "0"/"1" even if search_experiments omits them.
+    for probe_id in ("0", "1"):
+        try:
+            t = client.search_traces(locations=[probe_id])
+            logger.warning(
+                f"[#2284] PROBE search_traces(locations=['{probe_id}']) -> {len(t)}"
+            )
+        except Exception as ex:
+            logger.warning(
+                f"[#2284] PROBE search_traces(locations=['{probe_id}']) raised: {ex!r}"
+            )
+
+    # PROBE C — raw REST (bypass the SDK): are experiments visible on the server over
+    # the ingress at all? Empty here => read-path/ingress (chart) issue; non-empty here
+    # but empty from the SDK => SDK/serialization issue.
+    try:
+        import httpx
+
+        r = httpx.post(
+            f"{tracking_uri}/api/2.0/mlflow/experiments/search",
+            json={"max_results": 1000},
+            timeout=15,
+            verify=False,
+        )
+        logger.warning(
+            f"[#2284] PROBE REST experiments/search -> HTTP {r.status_code}; body[:300]={r.text[:300]}"
+        )
+    except Exception as ex:
+        logger.warning(f"[#2284] PROBE REST experiments/search raised: {ex!r}")
+
+
 def get_all_traces() -> list[dict[str, Any]]:
     """Get all traces from MLflow using Python client."""
     try:
@@ -420,7 +482,18 @@ def get_all_traces() -> list[dict[str, Any]]:
                 traces = client.search_traces(locations=[exp.experiment_id])
                 all_traces.extend(traces)
             except Exception as e:
-                logger.warning(f"Failed to search traces in experiment {exp.name}: {e}")
+                logger.warning(
+                    f"[#2284] search_traces(locations=[{exp.experiment_id}]) failed for "
+                    f"experiment {exp.name}: {e!r}"
+                )
+
+        # Issue #2284: if the read-back is empty, emit diagnostics + probe alternative
+        # read paths so a single CI run pins test-fix vs chart-fix. No-op on healthy runs.
+        if not all_traces:
+            try:
+                _diagnose_empty_traces(client, experiments)
+            except Exception as ex:  # diagnostics must never break the test
+                logger.warning(f"[#2284] diagnostics failed: {ex!r}")
 
         return all_traces
     except ValueError:
