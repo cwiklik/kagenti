@@ -24,24 +24,46 @@ export KEYCLOAK_URL="${KEYCLOAK_URL:-$(get_keycloak_url)}"
 
 # Determine Keycloak host for port-forward on Kind
 if [[ "$PLATFORM" == "kind" ]]; then
-  # Start port-forward if keycloak is not externally accessible
   KC_PF_PID=""
+  KC_KEEPALIVE_PID=""
+  AGENT_PF_PID=""
+
+  wait_serving() {  # $1=url  — poll up to 60s until it answers
+    local url="$1" i
+    for i in $(seq 1 30); do
+      curl -sk "$url" -o /dev/null 2>/dev/null && return 0
+      sleep 2
+    done
+    return 1
+  }
+
   if ! curl -sk "$KEYCLOAK_URL/realms/master" -o /dev/null 2>/dev/null; then
     log_info "Starting Keycloak port-forward..."
     kubectl port-forward svc/keycloak-service -n "$KC_NAMESPACE" 8081:8080 &>/dev/null &
     KC_PF_PID=$!
     export KEYCLOAK_URL="http://localhost:8081"
-    sleep 3
+    wait_serving "$KEYCLOAK_URL/realms/master" || log_warn "Keycloak port-forward not serving yet"
+
+    # Keepalive: re-establish the forward if the local port stops answering
+    # (Keycloak cold-start / dropped forward caused ReadTimeout, #2342 Bug B).
+    ( while true; do
+        sleep 5
+        curl -sk "$KEYCLOAK_URL/realms/master" -o /dev/null 2>/dev/null && continue
+        kill "$KC_PF_PID" 2>/dev/null || true
+        kubectl port-forward svc/keycloak-service -n "$KC_NAMESPACE" 8081:8080 &>/dev/null &
+        KC_PF_PID=$!
+      done ) &
+    KC_KEEPALIVE_PID=$!
   fi
 
-  # Start agent port-forward
   log_info "Starting agent port-forward..."
   kubectl port-forward svc/tx-e2e-agent -n "$TX_NAMESPACE" 8082:8080 &>/dev/null &
   AGENT_PF_PID=$!
   export TX_AGENT_URL="http://localhost:8082"
-  sleep 2
+  wait_serving "$TX_AGENT_URL" || true  # agent may 404 on /, that still proves the forward is up
 
   cleanup_pf() {
+    kill "$KC_KEEPALIVE_PID" 2>/dev/null || true
     kill "$KC_PF_PID" 2>/dev/null || true
     kill "$AGENT_PF_PID" 2>/dev/null || true
   }
