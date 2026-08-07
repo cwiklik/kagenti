@@ -256,7 +256,7 @@ for i in $(seq 1 90); do
   RV=$(kubectl get secrets -n "$TX_NAMESPACE" \
         -o jsonpath='{range .items[*]}{.metadata.name}={.metadata.resourceVersion}{"\n"}{end}' 2>/dev/null \
         | grep rossoctl-keycloak-client-credentials | sort || true)
-  CNT=$(printf '%s\n' "$RV" | grep -c . || echo 0)
+  CNT=$(printf '%s\n' "$RV" | grep -c . || true)
   if [[ "$CNT" -ge 2 && "$RV" == "$PREV_RV" ]]; then
     STABLE=$((STABLE + 1))
   else
