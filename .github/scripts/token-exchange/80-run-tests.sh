@@ -44,14 +44,18 @@ if [[ "$PLATFORM" == "kind" ]]; then
     export KEYCLOAK_URL="http://localhost:8081"
     wait_serving "$KEYCLOAK_URL/realms/master" || log_warn "Keycloak port-forward not serving yet"
 
+    # Use a PID file so the keepalive subshell and parent cleanup can share the forward's PID
+    KC_PF_PIDFILE=$(mktemp)
+    echo "$KC_PF_PID" > "$KC_PF_PIDFILE"
+
     # Keepalive: re-establish the forward if the local port stops answering
     # (Keycloak cold-start / dropped forward caused ReadTimeout, #2342 Bug B).
     ( while true; do
         sleep 5
         curl -sk "$KEYCLOAK_URL/realms/master" -o /dev/null 2>/dev/null && continue
-        kill "$KC_PF_PID" 2>/dev/null || true
+        kill "$(cat "$KC_PF_PIDFILE")" 2>/dev/null || true
         kubectl port-forward svc/keycloak-service -n "$KC_NAMESPACE" 8081:8080 &>/dev/null &
-        KC_PF_PID=$!
+        echo $! > "$KC_PF_PIDFILE"
       done ) &
     KC_KEEPALIVE_PID=$!
   fi
@@ -64,8 +68,9 @@ if [[ "$PLATFORM" == "kind" ]]; then
 
   cleanup_pf() {
     kill "$KC_KEEPALIVE_PID" 2>/dev/null || true
-    kill "$KC_PF_PID" 2>/dev/null || true
+    [ -n "${KC_PF_PIDFILE:-}" ] && kill "$(cat "$KC_PF_PIDFILE" 2>/dev/null)" 2>/dev/null || true
     kill "$AGENT_PF_PID" 2>/dev/null || true
+    [ -n "${KC_PF_PIDFILE:-}" ] && rm -f "$KC_PF_PIDFILE"
   }
   trap cleanup_pf EXIT
 fi
