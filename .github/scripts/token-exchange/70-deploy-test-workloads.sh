@@ -248,18 +248,29 @@ for deploy in tx-e2e-tool tx-e2e-agent; do
   }
 done
 
-# Wait for keycloak client credentials to be created by the operator
-log_info "Waiting for keycloak client credentials..."
-for i in $(seq 1 60); do
-  CRED_COUNT=$(kubectl get secrets -n "$TX_NAMESPACE" -o name 2>/dev/null | grep -c rossoctl-keycloak-client-credentials || echo "0")
-  if [[ "$CRED_COUNT" -ge 2 ]]; then
-    log_success "Found $CRED_COUNT keycloak credential secrets"
+# Wait for keycloak client credentials to CONVERGE (present + stable) — the
+# operator re-registers asynchronously; a count-only check races (#2342).
+log_info "Waiting for keycloak client credentials to converge..."
+PREV_RV=""; STABLE=0
+for i in $(seq 1 90); do
+  RV=$(kubectl get secrets -n "$TX_NAMESPACE" \
+        -o jsonpath='{range .items[*]}{.metadata.name}={.metadata.resourceVersion}{"\n"}{end}' 2>/dev/null \
+        | grep rossoctl-keycloak-client-credentials | sort)
+  CNT=$(printf '%s\n' "$RV" | grep -c . || echo 0)
+  if [[ "$CNT" -ge 2 && "$RV" == "$PREV_RV" ]]; then
+    STABLE=$((STABLE + 1))
+  else
+    STABLE=0
+  fi
+  PREV_RV="$RV"
+  if [[ "$STABLE" -ge 3 ]]; then
+    log_success "Credentials converged ($CNT secrets, stable across ${STABLE} polls)"
     break
   fi
-  if [[ "$i" -eq 60 ]]; then
-    log_warn "Only found $CRED_COUNT credential secrets after 5 min"
+  if [[ "$i" -eq 90 ]]; then
+    log_warn "Credentials not stable after ~3 min (count=$CNT); proceeding"
   fi
-  sleep 5
+  sleep 2
 done
 
 log_success "Test workloads deployed in $TX_NAMESPACE"
