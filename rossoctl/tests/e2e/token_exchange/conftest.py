@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import time
 
 import pytest
 import requests
@@ -43,6 +44,11 @@ TX_CLIENT_ID = os.environ.get("TX_CLIENT_ID", "tx-e2e-app")
 KEYCLOAK_URL = os.environ.get("KEYCLOAK_URL", "http://localhost:8081")
 KEYCLOAK_PROVIDER = os.environ.get("KEYCLOAK_PROVIDER", "community")
 TX_AGENT_URL = os.environ.get("TX_AGENT_URL", "http://localhost:8082")
+
+# #2342: the operator (re-)registers client credentials asynchronously after
+# 56-enable-spiffe.sh rotates them; wait until a real grant succeeds.
+CRED_CONVERGE_TIMEOUT = int(os.environ.get("TX_CRED_CONVERGE_TIMEOUT", "180"))
+CRED_RETRY_INTERVAL = int(os.environ.get("TX_CRED_RETRY_INTERVAL", "5"))
 
 
 # ---------------------------------------------------------------------------
@@ -144,17 +150,46 @@ def kc_client_secret(kc_admin_token):
 
 @pytest.fixture(scope="session")
 def agent_credentials(k8s):
-    """Discover agent keycloak credentials from secrets."""
-    secrets = k8s.list_namespaced_secret(TX_NAMESPACE)
+    """Discover agent/tool keycloak credentials and return them only once they
+    actually authenticate. The operator re-registers asynchronously after the
+    SPIFFE-setup rotation, so a one-shot read can cache a stale secret and every
+    client_credentials grant then fails with invalid_client (#2342). Re-read on
+    failure until a real grant succeeds or the timeout elapses.
+    """
+
+    def _read():
+        found = {}
+        for s in k8s.list_namespaced_secret(TX_NAMESPACE).items:
+            if "rossoctl-keycloak-client-credentials" in s.metadata.name:
+                cid = base64.b64decode(s.data.get("client-id.txt", "")).decode()
+                csecret = base64.b64decode(s.data.get("client-secret.txt", "")).decode()
+                if "agent" in cid.lower():
+                    found["agent"] = {"client_id": cid, "client_secret": csecret}
+                elif "tool" in cid.lower():
+                    found["tool"] = {"client_id": cid, "client_secret": csecret}
+        return found
+
+    def _authenticates(c):
+        resp = http.post(
+            f"{KEYCLOAK_URL}/realms/{TX_REALM}/protocol/openid-connect/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": c["client_id"],
+                "client_secret": c["client_secret"],
+            },
+            timeout=10,
+        )
+        return resp.status_code == 200
+
+    deadline = time.monotonic() + CRED_CONVERGE_TIMEOUT
     creds = {}
-    for s in secrets.items:
-        if "rossoctl-keycloak-client-credentials" in s.metadata.name:
-            cid = base64.b64decode(s.data.get("client-id.txt", "")).decode()
-            csecret = base64.b64decode(s.data.get("client-secret.txt", "")).decode()
-            if "agent" in cid.lower():
-                creds["agent"] = {"client_id": cid, "client_secret": csecret}
-            elif "tool" in cid.lower():
-                creds["tool"] = {"client_id": cid, "client_secret": csecret}
+    while time.monotonic() < deadline:
+        creds = _read()
+        if creds and all(_authenticates(c) for c in creds.values()):
+            return creds
+        time.sleep(CRED_RETRY_INTERVAL)
+    # Best-effort: return the last read so downstream tests surface the real
+    # failure (unchanged behavior in the pathological never-converges case).
     return creds
 
 
