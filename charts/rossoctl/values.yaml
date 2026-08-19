@@ -448,20 +448,6 @@ phoenix:
     enabled: true
 
 # ------------------------------------------------------------------
-#  Phoenix OAuth Secret Creator Configuration
-# ------------------------------------------------------------------
-phoenixOAuthSecret:
-  image: ghcr.io/rossoctl/rossoctl/phoenix-oauth-secret
-  tag: v0.8.0-alpha.1
-  # Keycloak client ID for Phoenix
-  clientId: phoenix
-  # Kubernetes secret name to store OAuth credentials
-  secretName: phoenix-oauth-secret
-  # When true, mount the in-cluster serviceaccount CA
-  # into the phoenix-oauth-secret job via the SSL_CERT_FILE environment variable.
-  useServiceAccountCA: true
-
-# ------------------------------------------------------------------
 #  MLflow Configuration
 # ------------------------------------------------------------------
 mlflow:

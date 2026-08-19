@@ -48,17 +48,11 @@ Options:
   --skip-chart-version   Do NOT update Chart.yaml version/appVersion
   -h, --help             Show this help message
 
-Images pinned (charts/rossoctl/values.yaml):
-  - ui.frontend.tag
-  - ui.backend.tag
-  - uiOAuthSecret.tag
-  - agentOAuthSecret.tag
-  - apiOAuthSecret.tag
-  - mlflowOAuthSecret.tag
-  - operatorSpiffeBootstrap.tag
-
-Images pinned (charts/rossoctl-deps/values.yaml):
-  - spiffeIdp.image.tag
+Images pinned:
+  Every ghcr.io/rossoctl/rossoctl/* image found in charts/rossoctl/values.yaml
+  and charts/rossoctl-deps/values.yaml is pinned (the set is derived from the
+  values files, so new rossoctl images are covered automatically). Run with
+  --dry-run to see the exact list for the current tree.
 
 EOF
     exit 0
@@ -129,20 +123,33 @@ fi
 
 REGISTRY="ghcr.io/rossoctl/rossoctl"
 
-# Map of yq paths to image names. These are ALL images built by this repo's
-# build.yaml CI workflow and must be kept in sync with the matrix there.
+# The set of pinnable images is derived dynamically from the chart values so
+# that ANY ghcr.io/rossoctl/rossoctl/* image is pinned automatically — a
+# hardcoded key list silently skipped new images (phoenix-oauth-secret and the
+# charts/rossoctl copy of spiffe-idp-setup were left stale; rossoctl/rossoctl#2401).
 #
-# Format: "values-file|yq-path|image-name"
-PINNABLE_IMAGES=(
-    "$ROSSOCTL_VALUES|.ui.frontend.tag|ui-v2"
-    "$ROSSOCTL_VALUES|.ui.backend.tag|backend"
-    "$ROSSOCTL_VALUES|.uiOAuthSecret.tag|ui-oauth-secret"
-    "$ROSSOCTL_VALUES|.agentOAuthSecret.tag|agent-oauth-secret"
-    "$ROSSOCTL_VALUES|.apiOAuthSecret.tag|api-oauth-secret"
-    "$ROSSOCTL_VALUES|.mlflowOAuthSecret.tag|mlflow-oauth-secret"
-    "$ROSSOCTL_VALUES|.operatorSpiffeBootstrap.tag|operator-spiffe-bootstrap"
-    "$ROSSOCTL_DEPS_VALUES|.spiffeIdp.image.tag|spiffe-idp-setup"
-)
+# For every string value matching the registry, we pin its sibling `tag`. This
+# handles both layouts in the values files by replacing the last path segment
+# with "tag":
+#   flat:    image: <ref>            + tag: <ver>   -> <parent>.tag
+#   nested:  image: { repository: <ref>, tag: <ver> } -> <parent>.image.tag
+# Format of each derived entry: "values-file|yq-path|image-name"
+derive_expr='.. | select((tag == "!!str") and (. == "'"$REGISTRY"'/*"))
+    | (path | .[-1] = "tag" | join("."))
+    + "|" + (. | sub("^'"$REGISTRY"'/"; "") | sub(":.*$"; ""))'
+
+PINNABLE_IMAGES=()
+for values_file in "$ROSSOCTL_VALUES" "$ROSSOCTL_DEPS_VALUES"; do
+    while IFS= read -r derived; do
+        [[ -z "$derived" ]] && continue
+        PINNABLE_IMAGES+=("$values_file|.$derived")
+    done < <(yq eval "$derive_expr" "$values_file")
+done
+
+if [[ ${#PINNABLE_IMAGES[@]} -eq 0 ]]; then
+    echo "error: no $REGISTRY/* images found in chart values — image derivation failed" >&2
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Colors
@@ -215,7 +222,9 @@ for entry in "${PINNABLE_IMAGES[@]}"; do
     if [[ "$DRY_RUN" == "true" ]]; then
         printf '%s[DRY]%s  %s (%s): %s → %s\n' "$YELLOW" "$NC" "$image_name" "$rel_path" "$current" "$VERSION"
     else
-        yq eval --arg v "$VERSION" "$yq_path = \$v" -i "$target_file"
+        VERSION="$VERSION" yq eval "$yq_path = strenv(VERSION)" -i "$target_file"
+        got=$(yq eval "$yq_path" "$target_file")
+        [[ "$got" == "$VERSION" ]] || { echo "error: pin verify failed for $yq_path in $rel_path (got '$got')" >&2; exit 1; }
         printf '%s[PIN]%s  %s (%s): %s → %s\n' "$GREEN" "$NC" "$image_name" "$rel_path" "$current" "$VERSION"
     fi
 done
@@ -245,8 +254,8 @@ if [[ "$SKIP_CHART_VERSION" != "true" ]]; then
         printf '%s[DRY]%s  Chart.yaml version: %s → %s\n' "$YELLOW" "$NC" "$current_chart_ver" "$chart_ver"
         printf '%s[DRY]%s  Chart.yaml appVersion: → %s\n' "$YELLOW" "$NC" "$chart_ver"
     else
-        yq eval --arg v "$chart_ver" '.version = $v' -i "$ROSSOCTL_CHART"
-        yq eval --arg v "$chart_ver" '.appVersion = $v' -i "$ROSSOCTL_CHART"
+        chart_ver="$chart_ver" yq eval '.version = strenv(chart_ver)' -i "$ROSSOCTL_CHART"
+        chart_ver="$chart_ver" yq eval '.appVersion = strenv(chart_ver)' -i "$ROSSOCTL_CHART"
         printf '%s[PIN]%s  Chart.yaml version + appVersion → %s\n' "$GREEN" "$NC" "$chart_ver"
     fi
 fi
