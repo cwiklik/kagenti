@@ -182,4 +182,4 @@ If the CI workflow fails after updating secrets:
 
 - [HyperShift Setup](../hypershift/setup.md)
 - [CI Workflows](.github/workflows/README.md)
-- [AWS IAM Policies](.github/scripts/hypershift/policies/README.md)
+- [AWS IAM Policies](../../.github/scripts/hypershift/policies/README.md)

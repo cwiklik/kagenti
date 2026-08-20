@@ -27,7 +27,7 @@ The example generic agent loads skill instructions and exposes them through its 
 Before starting, make sure:
 
 - Rossoctl is installed and the UI is reachable, as described in [`docs/getting-started/install.md`](../getting-started/install.md)
-- **the Skills feature flag is enabled** — Skills are disabled by default and must be explicitly enabled during installation (see [Enabling Skills](../skills.md#enabling-skills))
+- **the Skills feature flag is enabled** — Skills are disabled by default and must be explicitly enabled during installation (see [Enabling Skills](../concepts/skills.md#enabling-skills))
 - **the build system is deployed** — Agent builds require Shipwright and the in-cluster registry (`registry.cr-system.svc.cluster.local:5000`). Deploy with `--with-builds` or the build push step will fail with `no such host`. If you need to add it to an existing cluster: `scripts/kind/setup-rossoctl.sh --with-builds --skip-cluster`
 - you have access to a Rossoctl-enabled namespace, for example `team1`
 - the cluster can build example agents from GitHub
@@ -117,7 +117,7 @@ Add these variables with values that match your environment:
 Notes:
 
 - If you are using a hosted model endpoint, set these values according to that provider.
-- If you are using a local model setup supported by Rossoctl, use the values documented in [`docs/local-models.md`](../local-models.md).
+- If you are using a local model setup supported by Rossoctl, use the values documented in [`docs/local-models.md`](../getting-started/llms/local-models.md).
 
 Do not set `SKILL_FOLDERS` manually in this demo. When you select a skill in **Linked Skills**, Rossoctl mounts the linked skill ConfigMaps into the agent pod under `/app/skills/...` and sets `SKILL_FOLDERS` automatically for the generic agent runtime.
 
@@ -227,7 +227,7 @@ For a live demo, use this sequence:
 
 ### The Skills section is not visible in the UI
 
-The Skills feature is disabled by default. If the Skills navigation item or the **Import Skill** button is missing, the feature flag was not enabled at install time. See [Enabling Skills](../skills.md#enabling-skills) for how to enable it with the setup script (`--with-skills`) or how to enable it on an existing cluster with `helm upgrade` without a full redeploy.
+The Skills feature is disabled by default. If the Skills navigation item or the **Import Skill** button is missing, the feature flag was not enabled at install time. See [Enabling Skills](../concepts/skills.md#enabling-skills) for how to enable it with the setup script (`--with-skills`) or how to enable it on an existing cluster with `helm upgrade` without a full redeploy.
 
 ### The build fails with `no such host` when pushing the image
 
@@ -308,5 +308,5 @@ After the demo, delete the agent and skill from the Rossoctl UI:
 
 - [`docs/demos/demo-generic-agent.md`](./demo-generic-agent.md)
 - [`docs/getting-started/install.md`](../getting-started/install.md)
-- [`docs/local-models.md`](../local-models.md)
-- [`docs/skills.md`](../skills.md) — Skills feature flag, enabling instructions, and troubleshooting
+- [`docs/local-models.md`](../getting-started/llms/local-models.md)
+- [`docs/skills.md`](../concepts/skills.md) — Skills feature flag, enabling instructions, and troubleshooting

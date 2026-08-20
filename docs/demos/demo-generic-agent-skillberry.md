@@ -31,7 +31,7 @@ You can point Rossoctl at the skillberry-store in one of two ways:
    — call an LLM and read their configuration from environment variables on the
    store pod. To enable those plugins, inject the LLM provider/model and API keys
    via `skillberryStore.extraEnv` — see
-   [Configuring skillberry-store Environment Variables](../skills.md#configuring-skillberry-store-environment-variables).
+   [Configuring skillberry-store Environment Variables](../concepts/skills.md#configuring-skillberry-store-environment-variables).
 
 2. **External instance (this guide's main flow).** Run skillberry-store yourself
    somewhere reachable, register it as an external skill reference, and (for
@@ -457,8 +457,8 @@ Check that:
 
 - [`docs/demos/demo-generic-agent-skill.md`](./demo-generic-agent-skill.md) — local skill variant of this demo
 - [`docs/demos/demo-generic-agent.md`](./demo-generic-agent.md)
-- [`docs/skills.md`](../skills.md) — skills feature overview and feature flag configuration
+- [`docs/skills.md`](../concepts/skills.md) — skills feature overview and feature flag configuration
 - [`docs/superpowers/specs/2026-05-27-external-skill-registries-design.md`](../superpowers/specs/2026-05-27-external-skill-registries-design.md) — design spec for the external skill registry feature
 - [skillberry-store](https://github.ibm.com/skillberry/skillberry-store) — the external skill registry used in this demo
 - [`docs/getting-started/install.md`](../getting-started/install.md)
-- [`docs/local-models.md`](../local-models.md)
+- [`docs/local-models.md`](../getting-started/llms/local-models.md)

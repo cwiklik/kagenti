@@ -111,7 +111,7 @@ Preview what commands would execute without running them:
 
 ## Running the Demo
 
-There are three ways to get agent images for the demo: using pre-built images (recommended for a quick start), building from source using the OpenShift internal registry, or building from source with an external registry. Both Ollama and OpenAI backends are supported — see the [Local Models Guide](../local-models.md) for details.
+There are three ways to get agent images for the demo: using pre-built images (recommended for a quick start), building from source using the OpenShift internal registry, or building from source with an external registry. Both Ollama and OpenAI backends are supported — see the [Local Models Guide](../getting-started/llms/local-models.md) for details.
 
 ---
 

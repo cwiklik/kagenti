@@ -154,7 +154,7 @@ echo "🎉 All diagrams generated successfully!"
 ## Integration with Documentation
 
 These diagrams are referenced in the main documentation:
-- **[Identity Guide](../identity-guide.md)** - Complete authentication guide with embedded diagrams
+- **[Identity Guide](../concepts/identity-guide.md)** - Complete authentication guide with embedded diagrams
 - **[Token Exchange Examples](../../rossoctl/examples/identity/token_exchange.md)** - Detailed implementation examples
 
 ## Related Documentation
