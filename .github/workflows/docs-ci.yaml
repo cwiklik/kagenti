@@ -39,15 +39,24 @@ jobs:
         with:
           fetch-depth: 0  # need the merge-base to diff changed files against the PR base
 
-      # Gate only on links in the files THIS PR changes, so a docs reorg can't
-      # introduce a broken relative link (rossoctl/rossoctl#2412) without failing
-      # review — without forcing an up-front cleanup of the repo's pre-existing
-      # relative-link debt (tracked separately).
+      # Gate on broken relative links in the .md files THIS PR changes
+      # (rossoctl/rossoctl#2412), without forcing an up-front cleanup of the repo's
+      # pre-existing relative-link debt (~74 links; tracked in #2449).
+      #
+      # Scope note: this catches a broken relative link in an *edited* file. It does
+      # NOT catch a rename that moves a link target while leaving its (unedited)
+      # referrers stale — e.g. #2398 broke README.md (edited in the reorg PR, would
+      # be caught here) *and* CLAUDE.md (not edited, would slip through). That
+      # move-the-target class is only surfaced by the advisory full pass today.
       - name: Determine changed markdown files
         id: changed
         run: |
           base='${{ github.event.pull_request.base.sha }}'
-          files="$(git diff --name-only --diff-filter=d "${base}...HEAD" -- '*.md' | sort -u | tr '\n' ' ')"
+          # Prefix each path with ./ so a name can never be parsed as a lychee flag.
+          # (A pathological name with a space still can't inject: lychee errors on a
+          # nonexistent input path and fails the job, rather than passing silently.)
+          files="$(git diff --name-only --diff-filter=d "${base}...HEAD" -- '*.md' \
+                   | sort -u | sed 's,^,./,' | tr '\n' ' ')"
           echo "files=${files}" >> "$GITHUB_OUTPUT"
           [ -n "${files}" ] && echo "any=true" >> "$GITHUB_OUTPUT" || echo "any=false" >> "$GITHUB_OUTPUT"
           echo "Changed markdown: ${files:-<none>}"
