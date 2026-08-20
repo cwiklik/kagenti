@@ -6,9 +6,9 @@ draft: true       # excluded from https://www.rossoctl.dev/
 
 This guide explains how to use Rossoctl's external skill registry support to:
 
-1. publish the example [`summarizer`](../agent-examples/skills/summarizer) skill to a running [skillberry-store](https://github.ibm.com/skillberry/skillberry-store) instance,
+1. publish the example [`summarizer`](https://github.com/rossoctl/examples/tree/main/skills/summarizer) skill to a running [skillberry-store](https://github.ibm.com/skillberry/skillberry-store) instance,
 2. register the skill in Rossoctl as an **external skill reference** pointing to that registry,
-3. import the example [`generic_agent`](../agent-examples/a2a/generic_agent) and link the external skill,
+3. import the example [`generic_agent`](https://github.com/rossoctl/examples/tree/main/a2a/generic_agent) and link the external skill,
 4. and verify in chat that the skill is fetched from the registry at agent startup and used correctly.
 
 This flow differs from the [local skill demo](./demo-generic-agent-skill.md): the skill files are never uploaded into Rossoctl. Instead, Rossoctl stores only a pointer (URL + metadata) to the skillberry-store instance. When the agent pod starts, an init container fetches the skill archive from the registry and mounts it at the same path that a local skill would occupy. The agent runtime is unaware of the difference.

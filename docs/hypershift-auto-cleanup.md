@@ -277,5 +277,5 @@ Auto-cleanup with 3-hour TTL prevents >95% of forgotten cluster costs.
 ## References
 
 - [HyperShift Cluster Creation](../.github/scripts/hypershift/create-cluster.sh)
-- [Pattern Test Suite](../../../.github/scripts/hypershift/test-cleanup-patterns.sh)
+- Pattern Test Suite
 - [HyperShift Development Guide](developer/hypershift.md)

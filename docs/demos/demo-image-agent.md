@@ -24,7 +24,7 @@ Here's a breakdown of the sections:
 > **Prerequisites:**
 > Ensure you've completed the Rossoctl platform setup as described in the [Installation](../getting-started/install.md) section.
 
-You should also open the Agent Platform Demo Dashboard as instructed in the [Connect to the Rossoctl UI](../overview/quickstart.md#access-the-rossoctl-dashboard) section.
+You should also open the Agent Platform Demo Dashboard as instructed in the [Accessing the UI](../getting-started/install.md#accessing-the-ui) section.
 
 ---
 
