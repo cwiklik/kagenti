@@ -1,10 +1,12 @@
 """Tests for optional Context Service resources and agent attachments."""
 
-from unittest.mock import AsyncMock, patch
+import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from fastapi import HTTPException
+from kubernetes.client import ApiException
 
 from app.routers import contexts
 from app.routers.agents import (
@@ -13,7 +15,9 @@ from app.routers.agents import (
     _build_sandbox_manifest,
     _build_statefulset_manifest,
     _resolve_context_mounts,
+    get_agent,
 )
+from app.routers.agents_manifests import CONTEXTS_ANNOTATION, _record_contexts
 
 
 @pytest.mark.asyncio
@@ -102,6 +106,24 @@ async def test_context_attachments_require_service_url() -> None:
 
 
 @pytest.mark.asyncio
+async def test_context_attachments_reject_missing_context() -> None:
+    with (
+        patch("app.routers.agents.settings.context_service_url", "http://context-service:8080"),
+        patch(
+            "app.routers.contexts.resolve_context",
+            new=AsyncMock(side_effect=HTTPException(status_code=404, detail="context not found")),
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _resolve_context_mounts(
+            "team1", [ContextAttachment(name="does-not-exist")], "sandbox"
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "context not found"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("context_type", ["workspace", "memory", "knowledge", "artifacts"])
 async def test_context_attachments_resolve_pvc_for_sandbox_and_statefulset(
     context_type: str,
@@ -120,7 +142,9 @@ async def test_context_attachments_resolve_pvc_for_sandbox_and_statefulset(
             ("sandbox", _build_sandbox_manifest),
             ("statefulset", _build_statefulset_manifest),
         ):
-            volumes, mounts = await _resolve_context_mounts("team1", [attachment], workload_type)
+            volumes, mounts, resolved = await _resolve_context_mounts(
+                "team1", [attachment], workload_type
+            )
             agent_request = CreateAgentRequest(
                 name="research-agent",
                 namespace="team1",
@@ -135,6 +159,7 @@ async def test_context_attachments_resolve_pvc_for_sandbox_and_statefulset(
                 ext_volumes=volumes,
                 ext_volume_mounts=mounts,
             )
+            _record_contexts(manifest, resolved)
             pod_spec = (
                 manifest["spec"]["podTemplate"]["spec"]
                 if workload_type == "sandbox"
@@ -144,6 +169,16 @@ async def test_context_attachments_resolve_pvc_for_sandbox_and_statefulset(
             assert pod_spec["containers"][0]["volumeMounts"][-1]["mountPath"] == "/workspace"
             context_volume = next(v for v in pod_spec["volumes"] if v["name"] == "context-0")
             assert context_volume["persistentVolumeClaim"]["claimName"] == "context-research"
+            assert json.loads(manifest["metadata"]["annotations"][CONTEXTS_ANNOTATION]) == resolved
+            assert resolved == [
+                {
+                    "name": "research",
+                    "type": context_type,
+                    "mountPath": "/workspace",
+                    "readOnly": False,
+                    "claimName": "context-research",
+                }
+            ]
 
 
 @pytest.mark.asyncio
@@ -163,6 +198,121 @@ async def test_context_attachments_reject_non_pvc_attachment() -> None:
 
 
 @pytest.mark.asyncio
+async def test_context_attachments_reject_missing_type() -> None:
+    resource = {
+        "attachment": {"kind": "pvc", "claimName": "context-research"},
+    }
+    with (
+        patch("app.routers.agents.settings.context_service_url", "http://context-service:8080"),
+        patch("app.routers.contexts.resolve_context", new=AsyncMock(return_value=resource)),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _resolve_context_mounts("team1", [ContextAttachment(name="research")], "sandbox")
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail == "Context Service returned no type"
+
+
+@pytest.mark.asyncio
 async def test_context_attachments_reject_deployment() -> None:
     with pytest.raises(HTTPException, match="statefulset or sandbox"):
         await _resolve_context_mounts("team1", [ContextAttachment(name="research")], "deployment")
+
+
+@pytest.mark.asyncio
+async def test_get_statefulset_agent_reports_context_attachments() -> None:
+    attachments = [
+        {
+            "name": "research",
+            "type": "workspace",
+            "mountPath": "/workspace",
+            "readOnly": False,
+            "claimName": "context-research",
+        }
+    ]
+    kube = MagicMock()
+    kube.get_deployment.side_effect = ApiException(status=404)
+    kube.get_statefulset.return_value = {
+        "metadata": {
+            "name": "research-agent",
+            "namespace": "team1",
+            "labels": {},
+            "annotations": {CONTEXTS_ANNOTATION: json.dumps(attachments)},
+        },
+        "spec": {},
+        "status": {},
+    }
+    kube.get_service.side_effect = ApiException(status=404)
+
+    result = await get_agent("team1", "research-agent", kube)
+
+    assert result["contexts"] == attachments
+
+
+@pytest.mark.asyncio
+async def test_get_sandbox_agent_reports_context_attachments() -> None:
+    attachments = [
+        {
+            "name": "research",
+            "type": "workspace",
+            "mountPath": "/workspace",
+            "readOnly": False,
+            "claimName": "context-research",
+        }
+    ]
+    kube = MagicMock()
+    kube.get_deployment.side_effect = ApiException(status=404)
+    kube.get_statefulset.side_effect = ApiException(status=404)
+    kube.get_job.side_effect = ApiException(status=404)
+    kube.get_sandbox.return_value = {
+        "metadata": {
+            "name": "research-sandbox",
+            "namespace": "team1",
+            "labels": {},
+            "annotations": {CONTEXTS_ANNOTATION: json.dumps(attachments)},
+        },
+        "spec": {},
+        "status": {},
+    }
+    kube.get_service.side_effect = ApiException(status=404)
+
+    with patch("app.routers.agents.settings.rossoctl_feature_flag_agent_sandbox", True):
+        result = await get_agent("team1", "research-sandbox", kube)
+
+    assert result["workloadType"] == "sandbox"
+    assert result["contexts"] == attachments
+
+
+@pytest.mark.asyncio
+async def test_get_agent_with_malformed_contexts_omits_field() -> None:
+    kube = MagicMock()
+    kube.get_deployment.return_value = {
+        "metadata": {
+            "name": "legacy-agent",
+            "namespace": "team1",
+            "labels": {},
+            "annotations": {CONTEXTS_ANNOTATION: "not-json"},
+        },
+        "spec": {},
+        "status": {},
+    }
+    kube.get_service.side_effect = ApiException(status=404)
+
+    result = await get_agent("team1", "legacy-agent", kube)
+
+    assert "contexts" not in result
+
+
+@pytest.mark.asyncio
+async def test_get_agent_without_contexts_omits_field() -> None:
+    kube = MagicMock()
+    kube.get_deployment.return_value = {
+        "metadata": {"name": "plain-agent", "namespace": "team1", "labels": {}},
+        "spec": {},
+        "status": {},
+    }
+    kube.get_service.side_effect = ApiException(status=404)
+
+    result = await get_agent("team1", "plain-agent", kube)
+
+    assert "contexts" not in result
