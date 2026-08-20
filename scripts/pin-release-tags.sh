@@ -162,6 +162,53 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Surgical in-place value replacement
+#
+# `yq -i` rewrites (and reformats) the whole document — it drops blank lines and
+# re-indents sequences, which turned a 9-tag pin into ~100 lines of churn. To keep
+# the diff to only the version lines, we locate each target node's line with
+# `yq '... | line'` (read-only) and rewrite just that line's value with sed. The
+# line count never changes (same-line value swap), so line numbers stay valid
+# across successive edits within a file.
+# ---------------------------------------------------------------------------
+
+# Detect GNU vs BSD/macOS sed once: GNU accepts `--version`; BSD needs `-i ''`.
+if sed --version >/dev/null 2>&1; then
+    sed_i() { sed -i "$@"; }
+else
+    sed_i() { sed -i '' "$@"; }
+fi
+
+# pin_scalar FILE YQ_PATH VALUE — rewrite only the value of the scalar at YQ_PATH
+# to VALUE, in place, touching just that one line (no document reflow).
+#
+# yq's `line` operator is used as an anchor, but its offset is not uniform (0 for
+# top-level keys like Chart.yaml's .version, but -1 for nested keys in
+# values.yaml), so we resolve the exact line by matching YQ_PATH's trailing key
+# within a one-line window of the anchor. The post-write assertion at the call
+# site re-reads via yq and fails loudly if the substitution missed.
+pin_scalar() {
+    local file="$1" yq_path="$2" value="$3"
+    local key="${yq_path##*.}"
+    local anchor cand target=""
+    anchor=$(yq eval "$yq_path | line" "$file")
+    if [[ -z "$anchor" || "$anchor" == "0" ]]; then
+        echo "error: could not locate $yq_path in ${file#$REPO_ROOT/}" >&2
+        exit 1
+    fi
+    for cand in "$anchor" $((anchor + 1)); do
+        if sed -n "${cand}p" "$file" | grep -qE "^[[:space:]]*${key}:"; then
+            target="$cand"; break
+        fi
+    done
+    if [[ -z "$target" ]]; then
+        echo "error: could not resolve '$key:' line near $anchor in ${file#$REPO_ROOT/}" >&2
+        exit 1
+    fi
+    sed_i "${target}s#: .*#: ${value}#" "$file"
+}
+
+# ---------------------------------------------------------------------------
 # Verify images exist (optional)
 # ---------------------------------------------------------------------------
 
@@ -222,7 +269,7 @@ for entry in "${PINNABLE_IMAGES[@]}"; do
     if [[ "$DRY_RUN" == "true" ]]; then
         printf '%s[DRY]%s  %s (%s): %s → %s\n' "$YELLOW" "$NC" "$image_name" "$rel_path" "$current" "$VERSION"
     else
-        VERSION="$VERSION" yq eval "$yq_path = strenv(VERSION)" -i "$target_file"
+        pin_scalar "$target_file" "$yq_path" "$VERSION"
         got=$(yq eval "$yq_path" "$target_file")
         [[ "$got" == "$VERSION" ]] || { echo "error: pin verify failed for $yq_path in $rel_path (got '$got')" >&2; exit 1; }
         printf '%s[PIN]%s  %s (%s): %s → %s\n' "$GREEN" "$NC" "$image_name" "$rel_path" "$current" "$VERSION"
@@ -254,8 +301,11 @@ if [[ "$SKIP_CHART_VERSION" != "true" ]]; then
         printf '%s[DRY]%s  Chart.yaml version: %s → %s\n' "$YELLOW" "$NC" "$current_chart_ver" "$chart_ver"
         printf '%s[DRY]%s  Chart.yaml appVersion: → %s\n' "$YELLOW" "$NC" "$chart_ver"
     else
-        chart_ver="$chart_ver" yq eval '.version = strenv(chart_ver)' -i "$ROSSOCTL_CHART"
-        chart_ver="$chart_ver" yq eval '.appVersion = strenv(chart_ver)' -i "$ROSSOCTL_CHART"
+        pin_scalar "$ROSSOCTL_CHART" '.version' "$chart_ver"
+        pin_scalar "$ROSSOCTL_CHART" '.appVersion' "$chart_ver"
+        got_v=$(yq eval '.version' "$ROSSOCTL_CHART")
+        got_av=$(yq eval '.appVersion' "$ROSSOCTL_CHART")
+        [[ "$got_v" == "$chart_ver" && "$got_av" == "$chart_ver" ]] || { echo "error: Chart.yaml version pin verify failed (version='$got_v' appVersion='$got_av')" >&2; exit 1; }
         printf '%s[PIN]%s  Chart.yaml version + appVersion → %s\n' "$GREEN" "$NC" "$chart_ver"
     fi
 fi
