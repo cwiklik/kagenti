@@ -149,7 +149,6 @@ these include:
 | `ghcr.io/rossoctl/rossoctl/ui-oauth-secret` | `uiOAuthSecret.tag` | UI Keycloak client registration |
 | `ghcr.io/rossoctl/rossoctl/agent-oauth-secret` | `agentOAuthSecret.tag` | Agent Keycloak client registration |
 | `ghcr.io/rossoctl/rossoctl/api-oauth-secret` | `apiOAuthSecret.tag` | API Keycloak client registration |
-| `ghcr.io/rossoctl/rossoctl/phoenix-oauth-secret` | `phoenixOAuthSecret.tag` | Phoenix observability auth |
 | `quay.io/ladas/mlflow-oauth-secret` | `mlflowOAuthSecret.tag` | MLflow auth (move to `ghcr.io/rossoctl/rossoctl/mlflow-oauth-secret` once published) |
 
 Additionally, some Helm templates hardcode `:latest` for utility images
