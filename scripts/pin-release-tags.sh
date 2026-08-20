@@ -134,6 +134,13 @@ REGISTRY="ghcr.io/rossoctl/rossoctl"
 #   flat:    image: <ref>            + tag: <ver>   -> <parent>.tag
 #   nested:  image: { repository: <ref>, tag: <ver> } -> <parent>.image.tag
 # Format of each derived entry: "values-file|yq-path|image-name"
+#
+# By design, any layout OTHER than these two aborts the run (fail-loud, never a
+# silent skip): an image carrying an inline tag with no sibling `tag:` key yields
+# a `.tag` path that doesn't exist and the pin loop exits with an error; likewise
+# a values key containing a literal "." breaks the `join(".")` path. Both are
+# absent from these charts today — if one is introduced, extend this deriver
+# rather than let it half-pin the tree.
 derive_expr='.. | select((tag == "!!str") and (. == "'"$REGISTRY"'/*"))
     | (path | .[-1] = "tag" | join("."))
     + "|" + (. | sub("^'"$REGISTRY"'/"; "") | sub(":.*$"; ""))'
@@ -205,7 +212,13 @@ pin_scalar() {
         echo "error: could not resolve '$key:' line near $anchor in ${file#$REPO_ROOT/}" >&2
         exit 1
     fi
-    sed_i "${target}s#: .*#: ${value}#" "$file"
+    # Replace only the scalar value, preserving the key, its existing quoting,
+    # and any trailing comment. A blunt `s#: .*#: value#` would silently unquote
+    # (e.g. Chart.yaml's quoted appVersion) and strip trailing comments — changes
+    # the post-write assertion can't catch, since it compares the parsed value.
+    # Groups: 1=indent+key+colon+space, 2=open quote (or empty), 3=close quote,
+    # 4=trailing whitespace+comment; the value between 2 and 3 is rewritten.
+    sed_i -E "${target}s|^([[:space:]]*[^:]+:[[:space:]]*)(['\"]?)[^#[:space:]'\"]*(['\"]?)([[:space:]]*(#.*)?)\$|\1\2${value}\3\4|" "$file"
 }
 
 # ---------------------------------------------------------------------------
