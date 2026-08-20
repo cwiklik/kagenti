@@ -12,7 +12,7 @@ database, and serves the operations as MCP tools. Use it for demos, onboarding, 
 developing agents against a controlled, reproducible API before a real backend exists.
 
 > Simulated tools are gated by the `simulatedTools` feature flag (off by default).
-> Enable it with `--set featureFlags.simulatedTools=true` (see [installation](install.md)).
+> Enable it with `--set featureFlags.simulatedTools=true` (see [installation](getting-started/install.md)).
 
 ## Prerequisites
 - **LLM API key Secret** in the target namespace. The harness needs it at *both*
@@ -60,5 +60,5 @@ flight returns `409`.
 - **Never reaches Ready** — check egress to the inference endpoint.
 
 ## Related documentation
-- [Importing a tool (image / source)](new-tool.md)
+- [Importing a tool (image / source)](getting-started/new-tool.md)
 - Worked example: `rossoctl/examples/simulated-tools/tasks-api/`

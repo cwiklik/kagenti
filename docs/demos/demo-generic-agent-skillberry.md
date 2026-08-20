@@ -6,9 +6,9 @@ draft: true       # excluded from https://www.rossoctl.dev/
 
 This guide explains how to use Rossoctl's external skill registry support to:
 
-1. publish the example [`summarizer`](../agent-examples/skills/summarizer) skill to a running [skillberry-store](https://github.ibm.com/skillberry/skillberry-store) instance,
+1. publish the example [`summarizer`](https://github.com/rossoctl/examples/tree/main/skills/summarizer) skill to a running [skillberry-store](https://github.ibm.com/skillberry/skillberry-store) instance,
 2. register the skill in Rossoctl as an **external skill reference** pointing to that registry,
-3. import the example [`generic_agent`](../agent-examples/a2a/generic_agent) and link the external skill,
+3. import the example [`generic_agent`](https://github.com/rossoctl/examples/tree/main/a2a/generic_agent) and link the external skill,
 4. and verify in chat that the skill is fetched from the registry at agent startup and used correctly.
 
 This flow differs from the [local skill demo](./demo-generic-agent-skill.md): the skill files are never uploaded into Rossoctl. Instead, Rossoctl stores only a pointer (URL + metadata) to the skillberry-store instance. When the agent pod starts, an init container fetches the skill archive from the registry and mounts it at the same path that a local skill would occupy. The agent runtime is unaware of the difference.
@@ -31,7 +31,7 @@ You can point Rossoctl at the skillberry-store in one of two ways:
    — call an LLM and read their configuration from environment variables on the
    store pod. To enable those plugins, inject the LLM provider/model and API keys
    via `skillberryStore.extraEnv` — see
-   [Configuring skillberry-store Environment Variables](../skills.md#configuring-skillberry-store-environment-variables).
+   [Configuring skillberry-store Environment Variables](../concepts/skills.md#configuring-skillberry-store-environment-variables).
 
 2. **External instance (this guide's main flow).** Run skillberry-store yourself
    somewhere reachable, register it as an external skill reference, and (for
@@ -457,8 +457,8 @@ Check that:
 
 - [`docs/demos/demo-generic-agent-skill.md`](./demo-generic-agent-skill.md) — local skill variant of this demo
 - [`docs/demos/demo-generic-agent.md`](./demo-generic-agent.md)
-- [`docs/skills.md`](../skills.md) — skills feature overview and feature flag configuration
+- [`docs/skills.md`](../concepts/skills.md) — skills feature overview and feature flag configuration
 - [`docs/superpowers/specs/2026-05-27-external-skill-registries-design.md`](../superpowers/specs/2026-05-27-external-skill-registries-design.md) — design spec for the external skill registry feature
 - [skillberry-store](https://github.ibm.com/skillberry/skillberry-store) — the external skill registry used in this demo
 - [`docs/getting-started/install.md`](../getting-started/install.md)
-- [`docs/local-models.md`](../local-models.md)
+- [`docs/local-models.md`](../getting-started/llms/local-models.md)
