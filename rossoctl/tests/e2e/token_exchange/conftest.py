@@ -3,11 +3,14 @@
 import base64
 import json
 import os
+import time
 
 import pytest
 import requests
 import urllib3
 from kubernetes import client, config
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # E2E tests talk to in-cluster Keycloak over self-signed / internal certs.
 # Disable the noisy InsecureRequestWarning globally for this test suite and
@@ -26,6 +29,22 @@ def _make_http_session() -> requests.Session:
     """
     s = requests.Session()
     s.verify = False  # CodeQL [py/request-without-cert-validation]
+    # Kind reaches Keycloak through a `kubectl port-forward` tunnel that can stall or
+    # drop a connection under load, surfacing as a ReadTimeout/ConnectionError mid-test
+    # (#2342 bug B). Retry transient connect/read errors and 5xx (incl. POST — the token
+    # grant) so a tunnel blip doesn't fail an otherwise-valid request.
+    retry = Retry(
+        total=5,
+        connect=5,
+        read=5,
+        backoff_factor=0.5,
+        status_forcelist=(502, 503, 504),
+        allowed_methods=frozenset(["GET", "POST"]),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    s.mount("http://", adapter)
+    s.mount("https://", adapter)
     return s
 
 
@@ -142,12 +161,10 @@ def kc_client_secret(kc_admin_token):
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="session")
-def agent_credentials(k8s):
-    """Discover agent keycloak credentials from secrets."""
-    secrets = k8s.list_namespaced_secret(TX_NAMESPACE)
+def _read_agent_credentials(k8s):
+    """Read agent/tool client credentials from the operator-managed secrets."""
     creds = {}
-    for s in secrets.items:
+    for s in k8s.list_namespaced_secret(TX_NAMESPACE).items:
         if "rossoctl-keycloak-client-credentials" in s.metadata.name:
             cid = base64.b64decode(s.data.get("client-id.txt", "")).decode()
             csecret = base64.b64decode(s.data.get("client-secret.txt", "")).decode()
@@ -155,6 +172,40 @@ def agent_credentials(k8s):
                 creds["agent"] = {"client_id": cid, "client_secret": csecret}
             elif "tool" in cid.lower():
                 creds["tool"] = {"client_id": cid, "client_secret": csecret}
+    return creds
+
+
+@pytest.fixture(scope="session")
+def agent_credentials(k8s):
+    """Discover agent/tool keycloak credentials, waiting until the operator's async
+    client (re)registration settles.
+
+    The operator registers/rotates the ``rossoctl-keycloak-client-credentials-*`` secret
+    asynchronously, sometimes after the suite has started. A plain one-shot read can cache
+    a secret value that Keycloak then rotates out from under it, yielding ``invalid_client``
+    on the client-credentials grant (#2342 bug A). Poll until both credentials are present
+    AND their values are unchanged across a settle window, so the cached value matches the
+    current Keycloak client record.
+    """
+    settle_seconds = 20
+    deadline = time.time() + 240
+    prev_key = None
+    stable_since = None
+    creds = {}
+    while time.time() < deadline:
+        creds = _read_agent_credentials(k8s)
+        key = tuple(sorted((k, v["client_secret"]) for k, v in creds.items()))
+        both_present = bool(creds.get("agent") and creds.get("tool"))
+        if both_present and key == prev_key:
+            if (
+                stable_since is not None
+                and (time.time() - stable_since) >= settle_seconds
+            ):
+                break
+        else:
+            prev_key = key
+            stable_since = time.time() if both_present else None
+        time.sleep(5)
     return creds
 
 
