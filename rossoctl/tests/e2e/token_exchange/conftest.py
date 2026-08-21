@@ -3,7 +3,6 @@
 import base64
 import json
 import os
-import time
 
 import pytest
 import requests
@@ -177,35 +176,21 @@ def _read_agent_credentials(k8s):
 
 @pytest.fixture(scope="session")
 def agent_credentials(k8s):
-    """Discover agent/tool keycloak credentials, waiting until the operator's async
-    client (re)registration settles.
+    """Discover agent/tool keycloak client credentials from the operator-managed secrets.
 
-    The operator registers/rotates the ``rossoctl-keycloak-client-credentials-*`` secret
-    asynchronously, sometimes after the suite has started. A plain one-shot read can cache
-    a secret value that Keycloak then rotates out from under it, yielding ``invalid_client``
-    on the client-credentials grant (#2342 bug A). Poll until both credentials are present
-    AND their values are unchanged across a settle window, so the cached value matches the
-    current Keycloak client record.
+    Skips when the workload clients are registered as ``federated-jwt`` (SPIFFE): those clients
+    authenticate via JWT-SVID and have no client secret (``client-secret.txt`` is empty), so the
+    secret-based ``client_credentials`` grant can't apply — the SPIFFE (JWT-SVID) tests cover
+    those clients instead. This is the correct behavior when SPIFFE is enabled (#2342).
     """
-    settle_seconds = 20
-    deadline = time.time() + 240
-    prev_key = None
-    stable_since = None
-    creds = {}
-    while time.time() < deadline:
-        creds = _read_agent_credentials(k8s)
-        key = tuple(sorted((k, v["client_secret"]) for k, v in creds.items()))
-        both_present = bool(creds.get("agent") and creds.get("tool"))
-        if both_present and key == prev_key:
-            if (
-                stable_since is not None
-                and (time.time() - stable_since) >= settle_seconds
-            ):
-                break
-        else:
-            prev_key = key
-            stable_since = time.time() if both_present else None
-        time.sleep(5)
+    creds = _read_agent_credentials(k8s)
+    if not creds.get("agent", {}).get("client_secret") or not creds.get("tool", {}).get(
+        "client_secret"
+    ):
+        pytest.skip(
+            "workload clients are federated-jwt (SPIFFE) with no client secret; "
+            "secret-based client_credentials not applicable — see #2342"
+        )
     return creds
 
 

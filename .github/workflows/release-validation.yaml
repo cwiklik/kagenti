@@ -226,24 +226,6 @@ jobs:
           # don't gate the job on it. The two exec-based tests stay xfail until that's fixed. See #2129.
           kubectl wait --for=condition=Ready pod -l app=tx-e2e-agent -n tx-e2e --timeout=180s || true
           kubectl wait --for=condition=Ready pod -l app=tx-e2e-tool -n tx-e2e --timeout=180s || true
-          # #2342 bug A: the operator (re)registers the client-credentials Secret asynchronously,
-          # sometimes after the pod started, so the AuthBridge sidecar (which reads the secret at
-          # startup) presents a stale value and Keycloak returns invalid_client. Wait until the
-          # secret value stops changing, then restart the workloads so they mount the final secret.
-          prev=""; stable=0
-          for i in $(seq 1 24); do
-            cur=$(kubectl get secrets -n tx-e2e \
-              -o jsonpath='{range .items[*]}{.metadata.name}={.data.client-secret\.txt}{"\n"}{end}' 2>/dev/null \
-              | grep rossoctl-keycloak-client-credentials | sort || true)
-            if [ -n "$cur" ] && [ "$cur" = "$prev" ]; then stable=$((stable+1)); else stable=0; fi
-            [ "$stable" -ge 2 ] && echo "client credentials stable" && break
-            echo "waiting for client credentials to settle ($i)..."
-            prev="$cur"; sleep 10
-          done
-          kubectl rollout restart deployment -n tx-e2e --all || true
-          kubectl rollout status deployment -n tx-e2e --all --timeout=180s || true
-          kubectl wait --for=condition=Ready pod -l app=tx-e2e-agent -n tx-e2e --timeout=180s || true
-          kubectl wait --for=condition=Ready pod -l app=tx-e2e-tool -n tx-e2e --timeout=180s || true
 
       - name: Run token exchange E2E tests (community KC — non-fatal, known issue #2342)
         if: success()
