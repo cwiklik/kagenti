@@ -478,30 +478,46 @@ if [[ "$RENDER" == "true" ]]; then
     if ! command -v helm >/dev/null 2>&1; then
         add_error "$render_label" 0 "--render requires helm, which is not installed"
     else
+        # Isolate render artifacts in a private temp dir: --render is documented
+        # for local use too, where fixed /tmp names let concurrent runs clobber
+        # each other and leave a rendered manifest lingering on a shared host.
+        crp_tmp=$(mktemp -d)
+        trap 'rm -rf "$crp_tmp"' EXIT
         # Build dependencies so subcharts are rendered too. Public OCI, no auth.
-        if ! helm dependency build "$CHARTS_DIR" >/tmp/crp-helm-dep.log 2>&1; then
+        if ! helm dependency build "$CHARTS_DIR" >"$crp_tmp/helm-dep.log" 2>&1; then
             add_error "$render_label" 0 "helm dependency build failed (cannot render subcharts) — see output"
-            cat /tmp/crp-helm-dep.log >&2 || true
+            cat "$crp_tmp/helm-dep.log" >&2 || true
         else
             # openshift=false avoids the OpenShift-only required-value guards;
             # image references (incl. subcharts) render regardless.
             if ! helm template rossoctl "$CHARTS_DIR" --set openshift=false \
-                    > /tmp/crp-render.yaml 2>/tmp/crp-render.err; then
+                    > "$crp_tmp/render.yaml" 2>"$crp_tmp/render.err"; then
                 add_error "$render_label" 0 "helm template failed — see output"
-                cat /tmp/crp-render.err >&2 || true
+                cat "$crp_tmp/render.err" >&2 || true
             else
                 # Match a container-registry ref ending in a floating tag, in any
                 # field (image:, or a subchart ConfigMap value like authbridge:).
-                # Excludes version-pinned (:vX.Y.Z) and digest (@sha256:) refs.
-                float_re='(ghcr\.io|quay\.io|docker\.io|registry\.[a-z.]+)[^[:space:]"'\'']*:(latest|main|master)([^0-9A-Za-z._-]|$)'
-                matches=$(grep -nE "$float_re" /tmp/crp-render.yaml || true)
+                # The host is a generic "<name>.<tld>[:port]/..." pattern rather
+                # than an allowlist, so a future subchart pulling from gcr.io, ECR
+                # (*.dkr.ecr.*.amazonaws.com), or mcr.microsoft.com is covered too
+                # — that "image source the check can't see" class is what #2389 was.
+                # Matched case-insensitively (-i) so :LATEST is caught as well.
+                # The trailing [^0-9A-Za-z._-] boundary is deliberate: it excludes
+                # suffixed tags like :latest-arm64 / :main-abc123, which are
+                # effectively pinned. Version-pinned (:vX.Y.Z) and digest
+                # (@sha256:) refs never match the alternation.
+                float_re='[a-z0-9.-]+\.[a-z]{2,}(:[0-9]+)?/[^[:space:]"'\'']*:(latest|main|master)([^0-9A-Za-z._-]|$)'
+                matches=$(grep -niE "$float_re" "$crp_tmp/render.yaml" || true)
                 if [[ -z "$matches" ]]; then
                     add_ok "$render_label" "no floating image tags in rendered manifests (subcharts included)"
                 else
                     while IFS= read -r m; do
                         [[ -z "$m" ]] && continue
                         ln="${m%%:*}"
-                        ref=$(printf '%s' "$m" | grep -oE "$float_re" | head -1)
+                        ref=$(printf '%s' "$m" | grep -oiE "$float_re" | head -1)
+                        # Drop the trailing delimiter the boundary group captured
+                        # (e.g. a closing quote) so the reported ref reads clean.
+                        ref="${ref%[!0-9A-Za-z._-]}"
                         add_error "$render_label" "$ln" "floating image tag in rendered output: ${ref}"
                     done <<< "$matches"
                 fi
