@@ -245,6 +245,12 @@ kubectl get destinationrule -A
 > **All `*.localtest.me` routes returning HTTP 503 while pods look healthy?** That's the Ambient
 > expired-cert outage on long-running/suspended dev clusters — use **`istio:mesh-selfheal`**
 > (`scripts/k8s/mesh-recover.sh`) to detect and recover.
+>
+> **Proactively** (before the 503): run `scripts/k8s/mesh-recover.sh` in detect
+> mode from a machine with `openssl`. Exit code **4** / a `cert-expiry: WARN`
+> finding means the SPIRE trust-bundle CA is nearing expiry — plan a data-plane
+> restart or cluster recreate before the outage. Tune the window with
+> `CERT_WARN_SECONDS` (default 6h). This is advisory: it never restarts anything.
 
 #### SPIRE (Workload Identity)
 

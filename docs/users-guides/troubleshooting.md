@@ -98,6 +98,39 @@ kubectl rollout restart daemonset -n istio-system  ztunnel
 kubectl rollout restart -n rossoctl-system deployment http-istio
 ```
 
+### Mesh-wide 503 after host suspend (expired SPIRE SVIDs)
+
+**Symptom:** every `*.localtest.me:8080` route returns `HTTP 503` (`upstream
+connect error ... connection termination`) while all pods are `Running`, the
+gateway is `1/1`, and `HTTPRoute`/`Gateway` status is `Accepted`. Common after a
+laptop/host suspend longer than the SPIRE credential lifetime: the Ambient data
+plane (ztunnel + waypoints) keeps serving expired mTLS certs and never re-fetches.
+
+**Diagnose:**
+
+```bash
+# Expired-cert errors in ztunnel?
+kubectl logs -n istio-system -l app=ztunnel --tail=100 | grep -iE "certificate expired|CertificateExpired"
+# SPIRE agent stuck re-attesting?
+kubectl logs -n spire-system -l app.kubernetes.io/name=agent --tail=100 | grep -iE "reattest|service account token has expired"
+```
+
+**Recover:** rollout-restart the Ambient data plane so it re-fetches fresh certs:
+
+```bash
+scripts/k8s/mesh-recover.sh --fix        # detect + restart ztunnel/waypoints/gateway
+```
+
+`scripts/k8s/mesh-recover.sh` (no flags) detects and prints the commands without
+acting. An optional, feature-flagged, Kind-only CronJob (`meshSelfHeal.enabled`)
+can automate this. To catch it **before** the outage, run the script in detect
+mode periodically — exit code 4 warns on a near-expiry CA (see the `k8s:health`
+skill).
+
+**Expectation for dev clusters:** suspending the host longer than the SPIRE CA
+TTL requires a data-plane restart (above) or a cluster recreate. The root-cause
+fix is upstream ([istio/ztunnel#1679](https://github.com/istio/ztunnel/issues/1679)).
+
 ### Need to edit ENV values
 
 If you need to update the values in `charts/rossoctl/.secrets.yaml` file, e.g., `githubToken`,
