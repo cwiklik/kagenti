@@ -62,7 +62,7 @@ Usage: mesh-recover.sh [--fix] [--include-spire] [--probe-host HOST]
   --json           Emit a machine-readable JSON summary (for the CronJob remediator).
   -h, --help       This help.
 
-Exit: 0 healthy · 2 degraded (recoverable) · 3 inconclusive (unreachable / not Ambient) · 1 usage error.
+Exit: 0 healthy · 2 degraded (recoverable) · 3 inconclusive (unreachable / not Ambient) · 4 near-expiry (advisory) · 1 usage error.
 EOF
 }
 
@@ -90,10 +90,13 @@ run_cmd() {
 command -v kubectl >/dev/null 2>&1 || { log_error "kubectl not found in PATH"; exit 1; }
 HAVE_ISTIOCTL=false
 command -v istioctl >/dev/null 2>&1 && HAVE_ISTIOCTL=true
+HAVE_OPENSSL=false
+command -v openssl >/dev/null 2>&1 && HAVE_OPENSSL=true
 
 # Findings accumulate here for the summary / JSON output.
 DEGRADED=false       # a recoverable mesh outage (503 / expired certs) → exit 2, restart helps
 INCONCLUSIVE=false   # can't confirm health (gateway unreachable, no ztunnel) → exit 3, restart won't help
+NEAR_EXPIRY=false    # a cert is close to expiry but not yet expired → exit 4, ADVISORY (no restart)
 declare -a CHECKS=()   # "name|status|detail"
 declare -a ACTIONS=()  # recovery commands that were (or would be) run
 record() {
@@ -101,6 +104,7 @@ record() {
   case "$2" in
     DEGRADED)     DEGRADED=true ;;
     INCONCLUSIVE) INCONCLUSIVE=true ;;
+    WARN)         NEAR_EXPIRY=true ;;
   esac
   return 0
 }
@@ -190,6 +194,39 @@ check_ztunnel_certs() {
   fi
 }
 
+check_cert_expiry() {
+  # PROACTIVE: warn when the SPIRE trust-bundle CA is close to expiry, BEFORE
+  # ztunnel starts serving expired certs (the reactive check_ztunnel_certs case).
+  # The CA is the credential whose expiry drives the #1899 post-suspend deadlock.
+  # Needs openssl; on the tool-less CronJob image this degrades to a skipped
+  # INCONCLUSIVE finding (matching the istioctl-optional pattern above).
+  if ! $HAVE_OPENSSL; then
+    record "cert-expiry" "INCONCLUSIVE" "openssl not available — skipped proactive near-expiry check"
+    log_info "openssl not found — skipping proactive cert-expiry check (reactive checks still apply)"
+    return
+  fi
+  local ca warn_secs enddate
+  warn_secs="${CERT_WARN_SECONDS:-21600}"   # 6h default
+  # Trust bundle: spire-bundle (spire-system) or istio-ca-root-cert (ztwim ns).
+  ca=$(kubectl get cm spire-bundle -n spire-system -o jsonpath='{.data.bundle\.crt}' 2>/dev/null || true)
+  [[ -z "$ca" ]] && ca=$(kubectl get cm istio-ca-root-cert -n zero-trust-workload-identity-manager \
+        -o jsonpath='{.data.root-cert\.pem}' 2>/dev/null || true)
+  if [[ -z "$ca" ]]; then
+    record "cert-expiry" "INCONCLUSIVE" "trust-bundle ConfigMap not found (spire-bundle / istio-ca-root-cert)"
+    log_info "trust bundle not found — skipping proactive cert-expiry check"
+    return
+  fi
+  enddate=$(printf '%s' "$ca" | openssl x509 -enddate -noout 2>/dev/null | cut -d= -f2 || true)
+  log_info "Checking trust-bundle CA expiry (warn window ${warn_secs}s) ..."
+  if printf '%s' "$ca" | openssl x509 -checkend "$warn_secs" -noout >/dev/null 2>&1; then
+    record "cert-expiry" "OK" "trust-bundle CA not near expiry (notAfter ${enddate})"
+    log_success "trust-bundle CA not near expiry (notAfter ${enddate})"
+  else
+    record "cert-expiry" "WARN" "trust-bundle CA expires within ${warn_secs}s (notAfter ${enddate}) — plan a data-plane restart / cluster recreate before the mesh 503s"
+    log_warn "trust-bundle CA nearing expiry (notAfter ${enddate}) — advisory, no restart"
+  fi
+}
+
 check_spire_agent() {
   local ns restarts prev
   ns=$(kubectl get pods -A -l app=spire-agent -o jsonpath='{.items[0].metadata.namespace}' 2>/dev/null || true)
@@ -265,7 +302,7 @@ recover_mesh() {
 # ---------------------------------------------------------------------------
 emit_json() {
   local first=true
-  printf '{"degraded":%s,"inconclusive":%s,"fixed":%s,"checks":[' "$DEGRADED" "$INCONCLUSIVE" "$FIX"
+  printf '{"degraded":%s,"inconclusive":%s,"warn":%s,"fixed":%s,"checks":[' "$DEGRADED" "$INCONCLUSIVE" "$NEAR_EXPIRY" "$FIX"
   for c in "${CHECKS[@]}"; do
     IFS='|' read -r n s d <<<"$c"
     $first || printf ','; first=false
@@ -288,6 +325,7 @@ $JSON || { echo; log_info "Istio Ambient mesh self-heal — $($FIX && echo 'RECO
 
 check_mesh_reachability
 check_ztunnel_certs
+check_cert_expiry
 $INCLUDE_SPIRE && check_spire_agent
 
 if $DEGRADED; then
@@ -305,9 +343,11 @@ else
     log_success "Recovery applied — see re-probe result above."
   elif $INCONCLUSIVE; then
     log_warn "Could not confirm mesh health (gateway unreachable, or no ztunnel found). Check the gateway port-map and that this is an Ambient cluster — no restart attempted."
+  elif $NEAR_EXPIRY; then
+    log_warn "Mesh reachable, but the trust-bundle CA is nearing expiry (see cert-expiry above). Plan a data-plane restart or cluster recreate before it 503s. Root cause is upstream (istio/ztunnel#1679)."
   else
     log_success "Mesh healthy — no action needed."
   fi
 fi
 
-if $DEGRADED; then exit 2; elif $INCONCLUSIVE; then exit 3; else exit 0; fi
+if $DEGRADED; then exit 2; elif $INCONCLUSIVE; then exit 3; elif $NEAR_EXPIRY; then exit 4; else exit 0; fi
