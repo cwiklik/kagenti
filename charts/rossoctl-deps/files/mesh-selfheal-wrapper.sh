@@ -24,7 +24,14 @@ log() { echo "[mesh-selfheal] $*" >&2; }
 
 # Best-effort k8s Event against the CronJob so `kubectl describe cronjob mesh-selfheal` shows history.
 emit_event() {  # $1=type(Normal|Warning) $2=reason $3=message
-  local ts; ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  local ts msg
+  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  # Flatten to a single line, then emit as a YAML literal block scalar. The
+  # --json summary we pass as the message contains ':' (and other YAML
+  # metacharacters); interpolated into a plain `message: ${3}` scalar it makes
+  # `kubectl create -f -` fail with "mapping values are not allowed here", so
+  # the very Warning Events the design promises would silently never be created.
+  msg=$(printf '%s' "$3" | tr '\n\r' '  ')
   kubectl -n "$NS" create -f - >/dev/null 2>&1 <<EOF || log "event emit failed (non-fatal): $2"
 apiVersion: v1
 kind: Event
@@ -33,7 +40,8 @@ metadata:
   namespace: ${NS}
 type: ${1}
 reason: ${2}
-message: ${3}
+message: |-
+  ${msg}
 firstTimestamp: ${ts}
 lastTimestamp: ${ts}
 count: 1

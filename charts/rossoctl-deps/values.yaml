@@ -452,8 +452,12 @@ meshSelfHeal:
   enabled: false
   # Cron schedule for the probe+remediate tick.
   schedule: "*/5 * * * *"
-  # Stock image with bash + kubectl + curl (no custom image built for this).
-  image: "registry.k8s.io/kubectl:v1.31.0"
+  # Stock image bundling bash + curl + kubectl (all three verified present).
+  # NB: registry.k8s.io/kubectl is kubectl-only — no shell and no curl — so the
+  # ["bash", ...] command can't exec and the curl gateway probe would no-op.
+  # alpine/k8s ships all three; pinned (non-floating) and runs as the non-root
+  # UID set in the CronJob securityContext (see templates/mesh-selfheal.yaml).
+  image: "docker.io/alpine/k8s:1.31.0"
   # In-cluster gateway URL the CronJob probes (the Istio-generated Service for Gateway "http").
   gatewayUrl: "http://http-istio.rossoctl-system.svc.cluster.local:80"
   # Host header to probe; empty ⇒ mesh-recover.sh auto-discovers it from HTTPRoutes.

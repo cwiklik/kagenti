@@ -136,6 +136,13 @@ spec:
           restartPolicy: Never
           securityContext:
             runAsNonRoot: true
+            # Pin an explicit non-root UID/GID. The image defaults to root, and
+            # runAsNonRoot alone would let the kubelet reject the pod at admission
+            # ("container has runAsNonRoot and image will run as root"). fsGroup
+            # makes the HOME emptyDir below writable by this UID.
+            runAsUser: 65532
+            runAsGroup: 65532
+            fsGroup: 65532
             seccompProfile:
               type: RuntimeDefault
           containers:
@@ -148,6 +155,11 @@ spec:
                 capabilities:
                   drop: ["ALL"]
               env:
+                # readOnlyRootFilesystem is on, so give kubectl a writable HOME
+                # (the emptyDir below) for its discovery/http cache. Without it
+                # every kubectl call warns about an unwritable ~/.kube/cache.
+                - name: HOME
+                  value: /home/nonroot
                 - name: GATEWAY_URL
                   value: {{ .Values.meshSelfHeal.gatewayUrl | quote }}
                 - name: PROBE_HOST
@@ -171,9 +183,13 @@ spec:
               volumeMounts:
                 - name: scripts
                   mountPath: /scripts
+                - name: home
+                  mountPath: /home/nonroot
           volumes:
             - name: scripts
               configMap:
                 name: mesh-selfheal-scripts
                 defaultMode: 0755
+            - name: home
+              emptyDir: {}
 {{- end }}
