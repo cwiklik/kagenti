@@ -124,11 +124,12 @@ scripts/k8s/mesh-recover.sh --fix        # detect + restart ztunnel/waypoints/ga
 `scripts/k8s/mesh-recover.sh` (no flags) detects and prints the commands without
 acting. An optional, feature-flagged, Kind-only CronJob (`meshSelfHeal.enabled`)
 can automate this. To catch it **before** the outage, run the script in detect
-mode periodically — exit code 4 warns on a near-expiry CA (see the `k8s:health`
-skill).
+mode periodically — exit code 4 warns when the soonest-expiring ztunnel workload
+SVID is within `CERT_WARN_SECONDS` (default 6h) of expiry (see the `k8s:health`
+skill). This proactive check needs `kubectl` exec access and `jq`.
 
-**Expectation for dev clusters:** suspending the host longer than the SPIRE CA
-TTL requires a data-plane restart (above) or a cluster recreate. The root-cause
+**Expectation for dev clusters:** suspending the host longer than the SPIRE SVID
+lifetime requires a data-plane restart (above) or a cluster recreate. The root-cause
 fix is upstream ([istio/ztunnel#1679](https://github.com/istio/ztunnel/issues/1679)).
 
 ### Need to edit ENV values

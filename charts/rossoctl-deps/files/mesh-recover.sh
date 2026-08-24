@@ -90,8 +90,6 @@ run_cmd() {
 command -v kubectl >/dev/null 2>&1 || { log_error "kubectl not found in PATH"; exit 1; }
 HAVE_ISTIOCTL=false
 command -v istioctl >/dev/null 2>&1 && HAVE_ISTIOCTL=true
-HAVE_OPENSSL=false
-command -v openssl >/dev/null 2>&1 && HAVE_OPENSSL=true
 
 # Findings accumulate here for the summary / JSON output.
 DEGRADED=false       # a recoverable mesh outage (503 / expired certs) → exit 2, restart helps
@@ -102,7 +100,7 @@ declare -a ACTIONS=()  # recovery commands that were (or would be) run
 record() {
   CHECKS+=("$1|$2|$3")
   # OK and SKIP intentionally set no flag: SKIP is a non-fatal "couldn't check"
-  # (e.g. openssl missing, trust bundle not found) and must never flip a
+  # (e.g. jq missing, or ztunnel exec denied/unreachable) and must never flip a
   # healthy mesh to a degraded/inconclusive exit code.
   case "$2" in
     DEGRADED)     DEGRADED=true ;;
@@ -198,36 +196,66 @@ check_ztunnel_certs() {
 }
 
 check_cert_expiry() {
-  # PROACTIVE: warn when the SPIRE trust-bundle CA is close to expiry, BEFORE
-  # ztunnel starts serving expired certs (the reactive check_ztunnel_certs case).
-  # The CA is the credential whose expiry drives the #1899 post-suspend deadlock.
-  # Needs openssl; on the tool-less CronJob image this degrades to a skipped
-  # INCONCLUSIVE finding (matching the istioctl-optional pattern above).
-  if ! $HAVE_OPENSSL; then
-    record "cert-expiry" "SKIP" "openssl not available — skipped proactive near-expiry check"
-    log_info "openssl not found — skipping proactive cert-expiry check (reactive checks still apply)"
-    return
-  fi
-  local ca warn_secs enddate
+  # PROACTIVE: warn when a ztunnel-served workload SVID is close to expiry, BEFORE
+  # it actually expires and the data plane starts 503ing (the reactive
+  # check_ztunnel_certs case). These short-lived SVIDs — not the long-lived
+  # trust-domain root CA — are what lapse during a host suspend (#1899), so we
+  # read the real per-workload certChain expiry from ztunnel's admin config_dump
+  # (the same data `istioctl ztunnel-config certificates` surfaces).
+  #
+  # Needs `kubectl exec` into ztunnel + jq. On the CronJob ServiceAccount (which
+  # deliberately lacks pods/exec) or without jq, this degrades to a non-fatal
+  # SKIP finding — proactive warning is a manual / k8s:health-path capability
+  # (design decision for #1899), while the CronJob stays reactive-only.
+  local ns pod warn_secs dump result status detail
   warn_secs="${CERT_WARN_SECONDS:-21600}"   # 6h default
-  # Trust bundle: spire-bundle (spire-system) or istio-ca-root-cert (ztwim ns).
-  ca=$(kubectl get cm spire-bundle -n spire-system -o jsonpath='{.data.bundle\.crt}' 2>/dev/null || true)
-  [[ -z "$ca" ]] && ca=$(kubectl get cm istio-ca-root-cert -n zero-trust-workload-identity-manager \
-        -o jsonpath='{.data.root-cert\.pem}' 2>/dev/null || true)
-  if [[ -z "$ca" ]]; then
-    record "cert-expiry" "SKIP" "trust-bundle ConfigMap not found (spire-bundle / istio-ca-root-cert)"
-    log_info "trust bundle not found — skipping proactive cert-expiry check"
+  if ! command -v jq >/dev/null 2>&1; then
+    record "cert-expiry" "SKIP" "jq not available — skipped proactive SVID near-expiry check"
+    log_info "jq not found — skipping proactive SVID expiry check (reactive checks still apply)"
     return
   fi
-  enddate=$(printf '%s' "$ca" | openssl x509 -enddate -noout 2>/dev/null | cut -d= -f2 || true)
-  log_info "Checking trust-bundle CA expiry (warn window ${warn_secs}s) ..."
-  if printf '%s' "$ca" | openssl x509 -checkend "$warn_secs" -noout >/dev/null 2>&1; then
-    record "cert-expiry" "OK" "trust-bundle CA not near expiry (notAfter ${enddate})"
-    log_success "trust-bundle CA not near expiry (notAfter ${enddate})"
-  else
-    record "cert-expiry" "WARN" "trust-bundle CA expires within ${warn_secs}s (notAfter ${enddate}) — plan a data-plane restart / cluster recreate before the mesh 503s"
-    log_warn "trust-bundle CA nearing expiry (notAfter ${enddate}) — advisory, no restart"
+  ns=$(discover_ztunnel_ns)
+  pod=$(kubectl get pods -n "$ns" -l app=ztunnel -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  if [[ -z "$ns" || -z "$pod" ]]; then
+    record "cert-expiry" "SKIP" "no ztunnel pod found — skipped proactive SVID near-expiry check"
+    log_info "no ztunnel pod — skipping proactive SVID expiry check"
+    return
   fi
+  log_info "Checking ztunnel workload SVID expiry (warn window ${warn_secs}s) ..."
+  # ztunnel exposes each workload SVID's certChain in its admin config_dump.
+  # --request-timeout bounds the exec/API round-trip so a stalled node can't hang
+  # the run; --max-time bounds the in-pod curl. Either failure → empty dump → SKIP.
+  dump=$(kubectl exec --request-timeout=10s -n "$ns" "$pod" -- curl -s --max-time "$TIMEOUT" localhost:15000/config_dump 2>/dev/null || true)
+  if [[ -z "$dump" ]]; then
+    record "cert-expiry" "SKIP" "could not read ztunnel admin config_dump (exec denied or unreachable) — skipped near-expiry check"
+    log_info "ztunnel config_dump unavailable (needs pods/exec) — skipping proactive SVID expiry check"
+    return
+  fi
+  # Pick the soonest-expiring SVID and classify against the warn window. All time
+  # math is done in jq (fromdateiso8601/now) to avoid GNU-vs-BSD date(1) portability issues.
+  # Note: fromdateiso8601 expects the strict %Y-%m-%dT%H:%M:%SZ form ztunnel emits; a
+  # future fractional-seconds timestamp would fail the parse and degrade to SKIP (non-fatal).
+  result=$(printf '%s' "$dump" | jq -r --argjson warn "$warn_secs" '
+    [ .certificates[]?.certChain[]?.expirationTime | fromdateiso8601 ] as $exp
+    | if ($exp | length) == 0 then "SKIP|no workload SVID certs found in ztunnel config_dump"
+      else ($exp | min) as $soonest
+        | (($soonest - now) | floor) as $rem
+        | ($soonest | todateiso8601) as $when
+        | if $rem < $warn
+          then "WARN|soonest workload SVID expires in \($rem)s (\($when)) — the data plane will 503 if it is not rotated (e.g. after a host suspend)"
+          else "OK|soonest workload SVID valid for \($rem)s (\($when))" end
+      end' 2>/dev/null || true)
+  if [[ -z "$result" ]]; then
+    record "cert-expiry" "SKIP" "could not parse ztunnel config_dump — skipped near-expiry check"
+    log_info "could not parse ztunnel config_dump — skipping proactive SVID expiry check"
+    return
+  fi
+  status="${result%%|*}"; detail="${result#*|}"
+  case "$status" in
+    WARN) record "cert-expiry" "WARN" "$detail"; log_warn "$detail — advisory, no restart" ;;
+    OK)   record "cert-expiry" "OK"   "$detail"; log_success "$detail" ;;
+    *)    record "cert-expiry" "SKIP" "$detail"; log_info "$detail" ;;
+  esac
 }
 
 check_spire_agent() {
@@ -347,7 +375,7 @@ else
   elif $INCONCLUSIVE; then
     log_warn "Could not confirm mesh health (gateway unreachable, or no ztunnel found). Check the gateway port-map and that this is an Ambient cluster — no restart attempted."
   elif $NEAR_EXPIRY; then
-    log_warn "Mesh reachable, but the trust-bundle CA is nearing expiry (see cert-expiry above). Plan a data-plane restart or cluster recreate before it 503s. Root cause is upstream (istio/ztunnel#1679)."
+    log_warn "Mesh reachable, but a workload SVID is nearing expiry (see cert-expiry above). Plan a data-plane restart or cluster recreate before it 503s. Root cause is upstream (istio/ztunnel#1679)."
   else
     log_success "Mesh healthy — no action needed."
   fi
