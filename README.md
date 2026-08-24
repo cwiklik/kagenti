@@ -69,7 +69,7 @@ git clone https://github.com/rossoctl/rossoctl.git
 cd rossoctl
 
 # Check out the latest release
-git checkout v0.6.0
+git checkout v0.7.0
 
 # Copy and configure secrets (optional)
 cp charts/rossoctl/.secrets_template.yaml charts/rossoctl/.secrets.yaml
