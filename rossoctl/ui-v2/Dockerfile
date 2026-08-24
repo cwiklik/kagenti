@@ -25,7 +25,7 @@ RUN sed -i -r 's/^\ \ "version": (.*)/  "version": "'${RELEASE_TAG}'",/' package
 RUN npm run build
 
 # Stage 2: Serve with nginx
-FROM nginx:1.31-alpine@sha256:8b1e78743a03dbb2c95171cc58639fef29abc8816598e27fb910ed2e621e589a
+FROM nginx:1.31-alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752
 
 # Copy nginx configuration (server block only; mounted at conf.d/default.conf).
 # Force world-readable perms: the container runs as non-root UID 1001 (see below),
@@ -67,7 +67,7 @@ EXPOSE 8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/ || exit 1
+    CMD ["wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/"]
 
 # Run nginx (worker_processes is pinned in the main conf above, not via -g).
 CMD ["nginx", "-g", "daemon off;"]

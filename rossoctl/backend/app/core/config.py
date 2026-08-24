@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     debug: bool = False
     domain_name: str = "localtest.me"
 
+    # Version reported by GET /auth/config. backend/Dockerfile bakes this in from
+    # the RELEASE_TAG build arg — the same source ui-v2/Dockerfile substitutes into
+    # package.json for the UI version badge — so both report the same string.
+    # Empty (local dev/tests) falls back to rossoctl-backend package metadata.
+    rossoctl_backend_version: str = ""
+
     @property
     def is_running_in_cluster(self) -> bool:
         """Check if the backend is running inside a Kubernetes cluster."""
@@ -132,6 +138,9 @@ class Settings(BaseSettings):
     skill_registry_allowed_hosts: str = ""
     # Trace-analysis Observability card (links to the standalone trace-analysis component)
     rossoctl_feature_flag_trace_analysis: bool = False  # Trace-analysis Observability card
+    # Named context resources and agent attachments. An empty URL disables the integration.
+    context_service_url: str = ""
+    context_service_timeout: float = 10.0
 
     # AuthBridge runtime config (mounted from Helm-managed ConfigMap)
     authbridge_runtime_config_path: str = "/etc/rossoctl/authbridge/config.yaml"

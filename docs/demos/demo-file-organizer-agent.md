@@ -35,7 +35,7 @@ To deploy the File Organizer Agent:
 2. In the **Select Namespace to Deploy Agent** drop-down, choose the `<namespace>` where you'd like to deploy the agent. (These namespaces are defined in your `.env` file.)
 3. Under **Environment Variables**, configure LLM settings using one of these methods:
    - Click **Import .env File** and import `.env.openai` or `.env.ollama` from the agent examples repo, **or**
-   - Manually add env vars: `LLM_API_BASE`, `LLM_API_KEY`, and `LLM_MODEL` (see [Using Local Models](../getting-started/local-models.md) for values)
+   - Manually add env vars: `LLM_API_BASE`, `LLM_API_KEY`, and `LLM_MODEL` (see [Using Local Models](../getting-started/llms/local-models.md) for values)
 4. Under **Environment Variables**, also add:
    - Click `Add Environment Variable`
    - Under `Name` put `BUCKET_URI` and under `Value` put the URI of your cloud storage bucket (e.g., `s3://my-bucket-name/` for AWS S3)

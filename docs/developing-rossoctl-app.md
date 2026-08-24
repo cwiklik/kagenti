@@ -209,6 +209,6 @@ For a complete implementation with streaming support, error handling, and authen
 ## Next Steps
 
 - **Explore the app-demo:** [`rossoctl/examples/app-demo/`](../rossoctl/examples/app-demo/)
-- **Learn about authentication:** [Identity Guide](./identity-guide.md)
-- **Deploy your first agent:** [New Agent Guide](./new-agent.md)
+- **Learn about authentication:** [Identity Guide](concepts/identity-guide.md)
+- **Deploy your first agent:** [New Agent Guide](getting-started/new-agent.md)
 - **Understand the platform:** [Technical Details](./concepts/tech-details.md)
