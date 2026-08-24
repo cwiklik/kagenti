@@ -101,6 +101,9 @@ declare -a CHECKS=()   # "name|status|detail"
 declare -a ACTIONS=()  # recovery commands that were (or would be) run
 record() {
   CHECKS+=("$1|$2|$3")
+  # OK and SKIP intentionally set no flag: SKIP is a non-fatal "couldn't check"
+  # (e.g. openssl missing, trust bundle not found) and must never flip a
+  # healthy mesh to a degraded/inconclusive exit code.
   case "$2" in
     DEGRADED)     DEGRADED=true ;;
     INCONCLUSIVE) INCONCLUSIVE=true ;;
@@ -201,7 +204,7 @@ check_cert_expiry() {
   # Needs openssl; on the tool-less CronJob image this degrades to a skipped
   # INCONCLUSIVE finding (matching the istioctl-optional pattern above).
   if ! $HAVE_OPENSSL; then
-    record "cert-expiry" "INCONCLUSIVE" "openssl not available — skipped proactive near-expiry check"
+    record "cert-expiry" "SKIP" "openssl not available — skipped proactive near-expiry check"
     log_info "openssl not found — skipping proactive cert-expiry check (reactive checks still apply)"
     return
   fi
@@ -212,7 +215,7 @@ check_cert_expiry() {
   [[ -z "$ca" ]] && ca=$(kubectl get cm istio-ca-root-cert -n zero-trust-workload-identity-manager \
         -o jsonpath='{.data.root-cert\.pem}' 2>/dev/null || true)
   if [[ -z "$ca" ]]; then
-    record "cert-expiry" "INCONCLUSIVE" "trust-bundle ConfigMap not found (spire-bundle / istio-ca-root-cert)"
+    record "cert-expiry" "SKIP" "trust-bundle ConfigMap not found (spire-bundle / istio-ca-root-cert)"
     log_info "trust bundle not found — skipping proactive cert-expiry check"
     return
   fi
@@ -292,7 +295,7 @@ recover_mesh() {
     [[ -n "$ns" ]] && kubectl rollout status daemonset/ztunnel -n "$ns" --timeout=120s || true
     kubectl rollout status deploy/"$gw" -n "$GW_NS" --timeout=120s || true
     log_info "Re-probing to verify recovery ..."
-    DEGRADED=false; INCONCLUSIVE=false; CHECKS=()
+    DEGRADED=false; INCONCLUSIVE=false; NEAR_EXPIRY=false; CHECKS=()
     check_mesh_reachability
   fi
 }
