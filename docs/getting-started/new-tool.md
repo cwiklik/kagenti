@@ -1,6 +1,7 @@
 ---
 description: How to deploy your code onto Rossoctl.
 sidebar_label: Import a New Tool
+sidebar_position: 40
 ---
 
 ## Importing a New MCP Tool into the Platform
@@ -104,4 +105,4 @@ The example agents in the [agent-examples repository](https://github.com/rossoct
 
 ### Deployment Issues
 
-See the [Troubleshooting](/docs/users-guides/troubleshooting) section.
+See the [Troubleshooting](../users-guides/troubleshooting.md) section.
