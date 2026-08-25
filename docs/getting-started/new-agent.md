@@ -1,6 +1,7 @@
 ---
 description: How to deploy your code onto Rossoctl.
 sidebar_label: Import a New Agent
+sidebar_position: 30
 ---
 
 # Importing a New Agent into the Platform from a Code Base
@@ -142,4 +143,4 @@ Once the build succeeds, Rossoctl automatically:
 
 ### Deployment Issues
 
-See the [Troubleshooting](/docs/users-guides/troubleshooting) section.
+See the [Troubleshooting](../users-guides/troubleshooting.md) section.
