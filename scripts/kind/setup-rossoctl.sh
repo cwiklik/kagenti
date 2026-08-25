@@ -714,6 +714,8 @@ if $WITH_SPIRE; then
     --set "spire-server.controllerManager.ignoreNamespaces={kube-system,kube-public}" \
     --set spire-server.controllerManager.identities.clusterSPIFFEIDs.default.autoPopulateDNSNames=true \
     --set spire-server.controllerManager.identities.clusterSPIFFEIDs.default.jwtTTL=5m \
+    --set spire-server.controllerManager.identities.clusterSPIFFEIDs.default.ttl=24h \
+    --set spire-server.caTTL=168h \
     --set spiffe-oidc-discovery-provider.enabled=true \
     --set spiffe-oidc-discovery-provider.config.set_key_use=true \
     --set spiffe-oidc-discovery-provider.tls.spire.enabled=false \

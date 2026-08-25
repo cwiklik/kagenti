@@ -72,6 +72,7 @@ case "$rc" in
   0) emit_event Normal MeshHealthy "gateway reachable, mesh certs OK"; exit 0 ;;
   3) emit_event Warning MeshInconclusive "cannot confirm mesh health (restart would not help): ${summary}"; exit 0 ;;
   2) : ;;  # degraded/recoverable — fall through to gating
+  4) emit_event Warning MeshNearExpiry "trust-bundle CA nearing expiry (advisory; no restart): ${summary}"; exit 0 ;;
   *) log "unexpected rc=$rc; treating as inconclusive"; emit_event Warning MeshInconclusive "mesh-recover.sh rc=$rc"; exit 0 ;;
 esac
 

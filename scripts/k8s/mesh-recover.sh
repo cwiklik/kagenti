@@ -62,7 +62,7 @@ Usage: mesh-recover.sh [--fix] [--include-spire] [--probe-host HOST]
   --json           Emit a machine-readable JSON summary (for the CronJob remediator).
   -h, --help       This help.
 
-Exit: 0 healthy · 2 degraded (recoverable) · 3 inconclusive (unreachable / not Ambient) · 1 usage error.
+Exit: 0 healthy · 2 degraded (recoverable) · 3 inconclusive (unreachable / not Ambient) · 4 near-expiry (advisory) · 1 usage error.
 EOF
 }
 
@@ -94,13 +94,18 @@ command -v istioctl >/dev/null 2>&1 && HAVE_ISTIOCTL=true
 # Findings accumulate here for the summary / JSON output.
 DEGRADED=false       # a recoverable mesh outage (503 / expired certs) → exit 2, restart helps
 INCONCLUSIVE=false   # can't confirm health (gateway unreachable, no ztunnel) → exit 3, restart won't help
+NEAR_EXPIRY=false    # a cert is close to expiry but not yet expired → exit 4, ADVISORY (no restart)
 declare -a CHECKS=()   # "name|status|detail"
 declare -a ACTIONS=()  # recovery commands that were (or would be) run
 record() {
   CHECKS+=("$1|$2|$3")
+  # OK and SKIP intentionally set no flag: SKIP is a non-fatal "couldn't check"
+  # (e.g. jq missing, or ztunnel exec denied/unreachable) and must never flip a
+  # healthy mesh to a degraded/inconclusive exit code.
   case "$2" in
     DEGRADED)     DEGRADED=true ;;
     INCONCLUSIVE) INCONCLUSIVE=true ;;
+    WARN)         NEAR_EXPIRY=true ;;
   esac
   return 0
 }
@@ -190,6 +195,69 @@ check_ztunnel_certs() {
   fi
 }
 
+check_cert_expiry() {
+  # PROACTIVE: warn when a ztunnel-served workload SVID is close to expiry, BEFORE
+  # it actually expires and the data plane starts 503ing (the reactive
+  # check_ztunnel_certs case). These short-lived SVIDs — not the long-lived
+  # trust-domain root CA — are what lapse during a host suspend (#1899), so we
+  # read the real per-workload certChain expiry from ztunnel's admin config_dump
+  # (the same data `istioctl ztunnel-config certificates` surfaces).
+  #
+  # Needs `kubectl exec` into ztunnel + jq. On the CronJob ServiceAccount (which
+  # deliberately lacks pods/exec) or without jq, this degrades to a non-fatal
+  # SKIP finding — proactive warning is a manual / k8s:health-path capability
+  # (design decision for #1899), while the CronJob stays reactive-only.
+  local ns pod warn_secs dump result status detail
+  warn_secs="${CERT_WARN_SECONDS:-21600}"   # 6h default
+  if ! command -v jq >/dev/null 2>&1; then
+    record "cert-expiry" "SKIP" "jq not available — skipped proactive SVID near-expiry check"
+    log_info "jq not found — skipping proactive SVID expiry check (reactive checks still apply)"
+    return
+  fi
+  ns=$(discover_ztunnel_ns)
+  pod=$(kubectl get pods -n "$ns" -l app=ztunnel -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  if [[ -z "$ns" || -z "$pod" ]]; then
+    record "cert-expiry" "SKIP" "no ztunnel pod found — skipped proactive SVID near-expiry check"
+    log_info "no ztunnel pod — skipping proactive SVID expiry check"
+    return
+  fi
+  log_info "Checking ztunnel workload SVID expiry (warn window ${warn_secs}s) ..."
+  # ztunnel exposes each workload SVID's certChain in its admin config_dump.
+  # --request-timeout bounds the exec/API round-trip so a stalled node can't hang
+  # the run; --max-time bounds the in-pod curl. Either failure → empty dump → SKIP.
+  dump=$(kubectl exec --request-timeout=10s -n "$ns" "$pod" -- curl -s --max-time "$TIMEOUT" localhost:15000/config_dump 2>/dev/null || true)
+  if [[ -z "$dump" ]]; then
+    record "cert-expiry" "SKIP" "could not read ztunnel admin config_dump (exec denied or unreachable) — skipped near-expiry check"
+    log_info "ztunnel config_dump unavailable (needs pods/exec) — skipping proactive SVID expiry check"
+    return
+  fi
+  # Pick the soonest-expiring SVID and classify against the warn window. All time
+  # math is done in jq (fromdateiso8601/now) to avoid GNU-vs-BSD date(1) portability issues.
+  # Note: fromdateiso8601 expects the strict %Y-%m-%dT%H:%M:%SZ form ztunnel emits; a
+  # future fractional-seconds timestamp would fail the parse and degrade to SKIP (non-fatal).
+  result=$(printf '%s' "$dump" | jq -r --argjson warn "$warn_secs" '
+    [ .certificates[]?.certChain[]?.expirationTime | fromdateiso8601 ] as $exp
+    | if ($exp | length) == 0 then "SKIP|no workload SVID certs found in ztunnel config_dump"
+      else ($exp | min) as $soonest
+        | (($soonest - now) | floor) as $rem
+        | ($soonest | todateiso8601) as $when
+        | if $rem < $warn
+          then "WARN|soonest workload SVID expires in \($rem)s (\($when)) — the data plane will 503 if it is not rotated (e.g. after a host suspend)"
+          else "OK|soonest workload SVID valid for \($rem)s (\($when))" end
+      end' 2>/dev/null || true)
+  if [[ -z "$result" ]]; then
+    record "cert-expiry" "SKIP" "could not parse ztunnel config_dump — skipped near-expiry check"
+    log_info "could not parse ztunnel config_dump — skipping proactive SVID expiry check"
+    return
+  fi
+  status="${result%%|*}"; detail="${result#*|}"
+  case "$status" in
+    WARN) record "cert-expiry" "WARN" "$detail"; log_warn "$detail — advisory, no restart" ;;
+    OK)   record "cert-expiry" "OK"   "$detail"; log_success "$detail" ;;
+    *)    record "cert-expiry" "SKIP" "$detail"; log_info "$detail" ;;
+  esac
+}
+
 check_spire_agent() {
   local ns restarts prev
   ns=$(kubectl get pods -A -l app=spire-agent -o jsonpath='{.items[0].metadata.namespace}' 2>/dev/null || true)
@@ -255,7 +323,7 @@ recover_mesh() {
     [[ -n "$ns" ]] && kubectl rollout status daemonset/ztunnel -n "$ns" --timeout=120s || true
     kubectl rollout status deploy/"$gw" -n "$GW_NS" --timeout=120s || true
     log_info "Re-probing to verify recovery ..."
-    DEGRADED=false; INCONCLUSIVE=false; CHECKS=()
+    DEGRADED=false; INCONCLUSIVE=false; NEAR_EXPIRY=false; CHECKS=()
     check_mesh_reachability
   fi
 }
@@ -265,7 +333,7 @@ recover_mesh() {
 # ---------------------------------------------------------------------------
 emit_json() {
   local first=true
-  printf '{"degraded":%s,"inconclusive":%s,"fixed":%s,"checks":[' "$DEGRADED" "$INCONCLUSIVE" "$FIX"
+  printf '{"degraded":%s,"inconclusive":%s,"warn":%s,"fixed":%s,"checks":[' "$DEGRADED" "$INCONCLUSIVE" "$NEAR_EXPIRY" "$FIX"
   for c in "${CHECKS[@]}"; do
     IFS='|' read -r n s d <<<"$c"
     $first || printf ','; first=false
@@ -288,6 +356,7 @@ $JSON || { echo; log_info "Istio Ambient mesh self-heal — $($FIX && echo 'RECO
 
 check_mesh_reachability
 check_ztunnel_certs
+check_cert_expiry
 $INCLUDE_SPIRE && check_spire_agent
 
 if $DEGRADED; then
@@ -305,9 +374,11 @@ else
     log_success "Recovery applied — see re-probe result above."
   elif $INCONCLUSIVE; then
     log_warn "Could not confirm mesh health (gateway unreachable, or no ztunnel found). Check the gateway port-map and that this is an Ambient cluster — no restart attempted."
+  elif $NEAR_EXPIRY; then
+    log_warn "Mesh reachable, but a workload SVID is nearing expiry (see cert-expiry above). Plan a data-plane restart or cluster recreate before it 503s. Root cause is upstream (istio/ztunnel#1679)."
   else
     log_success "Mesh healthy — no action needed."
   fi
 fi
 
-if $DEGRADED; then exit 2; elif $INCONCLUSIVE; then exit 3; else exit 0; fi
+if $DEGRADED; then exit 2; elif $INCONCLUSIVE; then exit 3; elif $NEAR_EXPIRY; then exit 4; else exit 0; fi

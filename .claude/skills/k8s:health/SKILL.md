@@ -245,6 +245,15 @@ kubectl get destinationrule -A
 > **All `*.localtest.me` routes returning HTTP 503 while pods look healthy?** That's the Ambient
 > expired-cert outage on long-running/suspended dev clusters — use **`istio:mesh-selfheal`**
 > (`scripts/k8s/mesh-recover.sh`) to detect and recover.
+>
+> **Proactively** (before the 503): run `scripts/k8s/mesh-recover.sh` in detect
+> mode from a machine with `kubectl` exec access and `jq`. It reads the soonest-
+> expiring ztunnel **workload SVID** (via ztunnel's admin `config_dump`); exit code
+> **4** / a `cert-expiry: WARN` finding means an SVID is nearing expiry — plan a
+> data-plane restart or cluster recreate before the outage. Tune the window with
+> `CERT_WARN_SECONDS` (default 6h). This is advisory: it never restarts anything.
+> (The automated CronJob's ServiceAccount has no `pods/exec`, so it skips this
+> check — proactive warning is a manual / `k8s:health` capability.)
 
 #### SPIRE (Workload Identity)
 
