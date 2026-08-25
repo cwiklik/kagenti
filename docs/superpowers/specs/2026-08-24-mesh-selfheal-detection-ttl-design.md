@@ -31,8 +31,8 @@ make the outage likely, nor documents the failure for users.
 **Out of scope (upstream):** the root-cause SPIRE agent re-attest deadlock and
 ztunnel not re-fetching fresh SVIDs are tracked upstream
 ([ztunnel#1679](https://github.com/istio/ztunnel/issues/1679)). This work does
-**not** `Close #1899`; it advances the issue's remediation points #4 (docs),
-#5 (TTL right-sizing), and #6 (proactive detection).
+**not** `Close #1899`; it advances the issue's remediation points #4 (docs), #5
+(TTL right-sizing), and #6 (proactive detection).
 
 ## Goals
 
