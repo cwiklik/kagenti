@@ -8,14 +8,13 @@ Provides endpoints for chatting with A2A agents using the Agent-to-Agent protoco
 """
 
 import logging
-import re
 import time
 from typing import Optional, List
 from urllib.parse import unquote, urlparse
 from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -23,7 +22,7 @@ from app.core.auth import require_roles, get_required_user, ROLE_VIEWER, ROLE_OP
 from app.core.config import settings
 from app.services.kubernetes import KubernetesService, get_kubernetes_service
 from app.utils.routes import resolve_agent_url, sanitize_log
-from app.utils.naming import K8S_NAME_PATTERN
+from app.utils.naming import K8S_NAME_MAX_LENGTH, K8S_NAME_PATTERN, K8S_NAME_RE
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -31,9 +30,6 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 # A2A protocol constants
 A2A_AGENT_CARD_PATH = "/.well-known/agent-card.json"
 A2A_LEGACY_AGENT_CARD_PATH = "/.well-known/agent.json"
-
-# RFC 1123 label: lowercase alphanumeric, may contain hyphens, 1-63 chars.
-_K8S_NAME_RE = re.compile(K8S_NAME_PATTERN)
 
 # Characters permitted in an agent card path (positive allowlist).
 _SAFE_PATH_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/-_.")
@@ -80,8 +76,8 @@ async def _resolve_invoke_url(name: str, namespace: str, kube: KubernetesService
     Falls back to the bare service URL when the card is unavailable, has no
     path, or fails validation.
     """
-    name_match = _K8S_NAME_RE.fullmatch(name)
-    ns_match = _K8S_NAME_RE.fullmatch(namespace)
+    name_match = K8S_NAME_RE.fullmatch(name)
+    ns_match = K8S_NAME_RE.fullmatch(namespace)
     if not name_match or not ns_match:
         raise HTTPException(
             status_code=400,
@@ -167,8 +163,8 @@ class ChatResponse(BaseModel):
     dependencies=[Depends(require_roles(ROLE_VIEWER))],
 )
 async def get_agent_card(
-    namespace: str,
-    name: str,
+    namespace: str = Path(..., pattern=K8S_NAME_PATTERN, max_length=K8S_NAME_MAX_LENGTH),
+    name: str = Path(..., pattern=K8S_NAME_PATTERN, max_length=K8S_NAME_MAX_LENGTH),
     kube: KubernetesService = Depends(get_kubernetes_service),
 ) -> AgentCardResponse:
     """
@@ -177,8 +173,8 @@ async def get_agent_card(
     The agent card describes the agent's capabilities, skills, and metadata.
     All agents are reached via their cluster-internal URL through AuthBridge.
     """
-    name_match = _K8S_NAME_RE.fullmatch(name)
-    ns_match = _K8S_NAME_RE.fullmatch(namespace)
+    name_match = K8S_NAME_RE.fullmatch(name)
+    ns_match = K8S_NAME_RE.fullmatch(namespace)
     if not name_match or not ns_match:
         raise HTTPException(
             status_code=400,
@@ -243,10 +239,10 @@ async def get_agent_card(
     dependencies=[Depends(require_roles(ROLE_OPERATOR))],
 )
 async def send_message(
-    namespace: str,
-    name: str,
     request: ChatRequest,
     http_request: Request,
+    namespace: str = Path(..., pattern=K8S_NAME_PATTERN, max_length=K8S_NAME_MAX_LENGTH),
+    name: str = Path(..., pattern=K8S_NAME_PATTERN, max_length=K8S_NAME_MAX_LENGTH),
     user: TokenData = Depends(get_required_user),
     kube: KubernetesService = Depends(get_kubernetes_service),
 ) -> ChatResponse:
@@ -571,10 +567,10 @@ async def _stream_from_response(
 
 @router.post("/{namespace}/{name}/stream", dependencies=[Depends(require_roles(ROLE_OPERATOR))])
 async def stream_message(
-    namespace: str,
-    name: str,
     request: ChatRequest,
     http_request: Request,
+    namespace: str = Path(..., pattern=K8S_NAME_PATTERN, max_length=K8S_NAME_MAX_LENGTH),
+    name: str = Path(..., pattern=K8S_NAME_PATTERN, max_length=K8S_NAME_MAX_LENGTH),
     user: TokenData = Depends(get_required_user),
     kube: KubernetesService = Depends(get_kubernetes_service),
 ):
