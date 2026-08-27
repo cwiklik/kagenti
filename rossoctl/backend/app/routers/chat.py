@@ -8,6 +8,7 @@ Provides endpoints for chatting with A2A agents using the Agent-to-Agent protoco
 """
 
 import logging
+import re
 import time
 from typing import Optional, List
 from urllib.parse import unquote, urlparse
@@ -31,14 +32,15 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 A2A_AGENT_CARD_PATH = "/.well-known/agent-card.json"
 A2A_LEGACY_AGENT_CARD_PATH = "/.well-known/agent.json"
 
-# Characters permitted in an agent card path (positive allowlist).
-_SAFE_PATH_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/-_.")
+# Positive allowlist for an agent card path, as a regex. Using a regex fullmatch
+# (and its .group(0) result) rather than a char-set membership test lets the
+# resulting suffix act as a CodeQL-recognized sanitizer barrier for the outbound
+# request URL (py/full-server-side-request-forgery).
+_SAFE_PATH_RE = re.compile(r"[A-Za-z0-9/_.-]+")
 
-# Characters permitted in an agent card query string (positive allowlist).
-# Excludes ':', '/', '#', and '%' to block URL injection and encoding attacks.
-_SAFE_QUERY_CHARS = frozenset(
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.=&+"
-)
+# Positive allowlist for an agent card query string. Excludes ':', '/', '#', and
+# '%' to block URL injection and encoding attacks.
+_SAFE_QUERY_RE = re.compile(r"[A-Za-z0-9_.=&+-]+")
 
 
 # TTL cache for resolved invoke URLs: {(name, namespace): (url, timestamp)}.
@@ -102,15 +104,17 @@ async def _resolve_invoke_url(name: str, namespace: str, kube: KubernetesService
             if card_url:
                 parsed = urlparse(card_url)
                 path = unquote(parsed.path)
-                if (
-                    path
-                    and path != "/"
-                    and ".." not in path.split("/")
-                    and all(c in _SAFE_PATH_CHARS for c in path)
-                ):
-                    suffix = path
-                    if parsed.query and all(c in _SAFE_QUERY_CHARS for c in parsed.query):
-                        suffix = f"{path}?{parsed.query}"
+                path_match = _SAFE_PATH_RE.fullmatch(path)
+                if path and path != "/" and ".." not in path.split("/") and path_match:
+                    # Build the suffix from the regex match results (.group(0)),
+                    # not the raw parsed values. The agent card URL is a remote-
+                    # controlled input; deriving the appended path/query from a
+                    # regex match breaks the CodeQL SSRF taint chain into the
+                    # outbound request URL below.
+                    suffix = path_match.group(0)
+                    query_match = _SAFE_QUERY_RE.fullmatch(parsed.query) if parsed.query else None
+                    if query_match:
+                        suffix = f"{suffix}?{query_match.group(0)}"
                     result = f"{base_url}{suffix}"
                     _invoke_url_cache[cache_key] = (result, now)
                     return result
