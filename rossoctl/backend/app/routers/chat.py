@@ -255,7 +255,19 @@ async def send_message(
     Forwards the Authorization header from the client to the agent for
     authenticated requests.
     """
-    agent_url = await _resolve_invoke_url(name, namespace, kube)
+    # Re-derive name/namespace from the RFC-1123 regex match (not the raw path
+    # params) before they reach the outbound request URL. This is a CodeQL-
+    # recognized sanitizer barrier for the SSRF sink below — mirroring
+    # get_agent_card and _resolve_invoke_url's own guard — on top of the
+    # Path(pattern=...) boundary.
+    name_match = K8S_NAME_RE.fullmatch(name)
+    ns_match = K8S_NAME_RE.fullmatch(namespace)
+    if not name_match or not ns_match:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid agent name or namespace",
+        )
+    agent_url = await _resolve_invoke_url(name_match.group(0), ns_match.group(0), kube)
     session_id = request.session_id or uuid4().hex
 
     # Build A2A message payload. When the frontend supplied a session_id
@@ -586,7 +598,19 @@ async def stream_message(
     Returns HTTP 401 directly when the agent rejects the token, enabling
     the frontend to trigger token refresh and retry transparently.
     """
-    agent_url = await _resolve_invoke_url(name, namespace, kube)
+    # Re-derive name/namespace from the RFC-1123 regex match (not the raw path
+    # params) before they reach the outbound request URL. This is a CodeQL-
+    # recognized sanitizer barrier for the SSRF sink below — mirroring
+    # get_agent_card and _resolve_invoke_url's own guard — on top of the
+    # Path(pattern=...) boundary.
+    name_match = K8S_NAME_RE.fullmatch(name)
+    ns_match = K8S_NAME_RE.fullmatch(namespace)
+    if not name_match or not ns_match:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid agent name or namespace",
+        )
+    agent_url = await _resolve_invoke_url(name_match.group(0), ns_match.group(0), kube)
     session_id = request.session_id or uuid4().hex
 
     # Extract Authorization header if present
